@@ -29,9 +29,12 @@ export interface SheetLoginResult {
   profile: SheetAuthProfile;
 }
 
+const WEBAPP_NOT_CONFIGURED_MSG =
+  'Login por e-mail e senha não está disponível no momento. Use "Entrar com Google" ou solicite sua senha ao financeiro@binsight.com.br.';
+
 async function postConnect<T>(payload: Record<string, unknown>): Promise<T> {
   if (!isConnectPortalConfigured()) {
-    throw new Error('Portal Connect Web App não configurado (VITE_CONNECT_WEBAPP_URL).');
+    throw new Error(WEBAPP_NOT_CONFIGURED_MSG);
   }
   const res = await fetch(WEBAPP_URL, {
     method: 'POST',
@@ -132,6 +135,18 @@ export async function fetchDriveFileViaSheetAuth(
   };
 }
 
+/** Apps Script sheet-auth session: base64url(JSON).base64url(HMAC), not Google OAuth. */
 export function isSheetSessionToken(token: string | null | undefined): boolean {
-  return Boolean(token && token.includes('.') && token.length > 40);
+  if (!token || token.length <= 40) return false;
+  if (token.startsWith('ya29.') || token.startsWith('1//')) return false;
+  const parts = token.split('.');
+  if (parts.length !== 2) return false;
+  try {
+    const b64 = parts[0].replace(/-/g, '+').replace(/_/g, '/');
+    const padded = b64 + '='.repeat((4 - (b64.length % 4)) % 4);
+    const data = JSON.parse(atob(padded)) as { email?: string; exp?: number };
+    return Boolean(data.email && typeof data.exp === 'number');
+  } catch {
+    return false;
+  }
 }

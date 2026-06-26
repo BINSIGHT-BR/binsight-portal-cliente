@@ -1,7 +1,6 @@
 import { FormEvent, useState } from 'react';
 import BinsightBrand from './BinsightBrand';
 import { USE_MOCK_DATA } from '../constants/columns';
-import { isConnectPortalConfigured } from '../utils/connectPortalApi';
 import type { MockLoginRole } from '../utils/mockAuth';
 
 interface Props {
@@ -23,7 +22,7 @@ export default function AuthScreen({
 }: Props) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const showEmailLogin = !usingMockData && isConnectPortalConfigured() && onLoginWithCredentials;
+  const showEmailLogin = !usingMockData && Boolean(onLoginWithCredentials);
 
   const handleEmailLogin = (e: FormEvent) => {
     e.preventDefault();

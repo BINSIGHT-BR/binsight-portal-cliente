@@ -24,11 +24,14 @@ Um único Apps Script (`ConnectNotify.gs` + `ConnectAuth.gs`) publicado como Web
 ## Publicar (clasp)
 
 ```bash
-# Reautenticar se invalid_grant:
+# Sempre a partir da raiz do projeto (NÃO rode de ~):
+cd ~/Documents/binsight-portal-cliente
+
+# Reautenticar clasp se invalid_grant (login SEM argumentos extras):
 cd apps-script/deploy/connect-notify
 npx @google/clasp@latest login
+cd ~/Documents/binsight-portal-cliente
 
-# Na raiz do portal-cliente:
 npm run deploy:notify
 ```
 
@@ -51,6 +54,7 @@ VITE_NOTIFY_SECRET=...
 Rebuild + hosting:
 
 ```bash
+cd ~/Documents/binsight-portal-cliente
 npm run deploy:hosting
 ```
 

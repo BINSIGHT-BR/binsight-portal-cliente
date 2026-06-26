@@ -8,10 +8,17 @@ interface Props {
   accessToken: string;
   email: string;
   displayName: string;
+  googleFirstAccess?: boolean;
   onRegistered?: () => void | Promise<void>;
 }
 
-export default function ClientRegisterForm({ accessToken, email, displayName, onRegistered }: Props) {
+export default function ClientRegisterForm({
+  accessToken,
+  email,
+  displayName,
+  googleFirstAccess = false,
+  onRegistered,
+}: Props) {
   const [nome, setNome] = useState(displayName);
   const [cnpj, setCnpj] = useState('');
   const [notifyEmail, setNotifyEmail] = useState(true);
@@ -57,10 +64,13 @@ export default function ClientRegisterForm({ accessToken, email, displayName, on
   return (
     <div className="max-w-md mx-auto py-8 px-4">
       <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm">
-        <h2 className="text-lg font-bold text-slate-800">Solicitar acesso</h2>
+        <h2 className="text-lg font-bold text-slate-800">
+          {googleFirstAccess ? 'Complete seu cadastro' : 'Solicitar acesso'}
+        </h2>
         <p className="text-sm text-slate-500 mt-1 mb-6">
-          Informe o CNPJ da empresa para acompanhar pedidos. Um responsável BInsight validará seu acesso.
-          Use o mesmo e-mail Google que receberá permissão nos documentos (NF/boleto).
+          {googleFirstAccess
+            ? 'Seu Google foi autenticado com sucesso. Informe o CNPJ da empresa para acompanhar pedidos — a equipe BInsight validará seu acesso.'
+            : 'Informe o CNPJ da empresa para acompanhar pedidos. Um responsável BInsight validará seu acesso. Use o mesmo e-mail que receberá permissão nos documentos (NF/boleto).'}
         </p>
 
         {error && (

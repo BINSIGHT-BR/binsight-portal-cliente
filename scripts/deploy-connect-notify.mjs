@@ -15,9 +15,35 @@ const gsPath = join(deployDir, 'ConnectNotify.gs');
 const envProd = join(root, '.env.production');
 const PLACEHOLDER = '___NOTIFY_SECRET_PLACEHOLDER___';
 
+if (!existsSync(join(root, 'package.json')) || !existsSync(join(root, 'firebase.json'))) {
+  console.error('Execute npm run deploy:notify a partir de ~/Documents/binsight-portal-cliente');
+  console.error(`(cwd atual esperado: ${root})`);
+  process.exit(1);
+}
+
+if (!existsSync(deployDir)) {
+  console.error(`Pasta não encontrada: ${deployDir}`);
+  process.exit(1);
+}
+
 function run(cmd, cwd = deployDir) {
   console.log('>', cmd);
   execSync(cmd, { cwd, stdio: 'inherit' });
+}
+
+function ensureClaspAuth() {
+  try {
+    execSync('npx -y @google/clasp@latest list-scripts', { encoding: 'utf8', stdio: 'pipe' });
+  } catch (e) {
+    const detail = `${e.stderr?.toString() || ''}${e.stdout?.toString() || ''}${e.message || ''}`;
+    if (/invalid_grant|not logged in|No credentials/i.test(detail)) {
+      console.error('\nClasp não autenticado ou token expirado (invalid_grant).');
+      console.error('Reautentique (sem argumentos extras):');
+      console.error('  cd ~/Documents/binsight-portal-cliente/apps-script/deploy/connect-notify');
+      console.error('  npx @google/clasp@latest login\n');
+      process.exit(1);
+    }
+  }
 }
 
 const secret =
@@ -36,6 +62,7 @@ gs = gs.replace(PLACEHOLDER, secret);
 writeFileSync(gsPath, gs, 'utf8');
 
 try {
+  ensureClaspAuth();
   if (!existsSync(join(deployDir, '.clasp.json'))) {
     run(
       'npx -y @google/clasp@latest create --type standalone --title "Connect Notify" --parentId 1ciJ-9TtKvEKiU7AVwKJIVrcnlPQUzxXy'
