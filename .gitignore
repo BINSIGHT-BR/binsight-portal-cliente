@@ -1,0 +1,28 @@
+# Dependencies
+node_modules/
+functions/node_modules/
+
+# Build output
+dist/
+functions/lib/
+
+# Environment (never commit secrets)
+.env*
+!.env.example
+
+# Firebase local cache
+.firebase/
+
+# Logs and OS
+*.log
+npm-debug.log*
+.DS_Store
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# TypeScript cache
+*.tsbuildinfo

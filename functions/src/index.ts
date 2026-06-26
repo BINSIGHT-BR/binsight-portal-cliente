@@ -1,0 +1,1 @@
+export { clienteApi } from './clienteApi';

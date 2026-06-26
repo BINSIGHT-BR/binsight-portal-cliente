@@ -1,0 +1,12 @@
+{
+  "projects": {
+    "default": "comercial-binsight"
+  },
+  "targets": {
+    "comercial-binsight": {
+      "hosting": {
+        "connect-binsight": ["connect-binsight"]
+      }
+    }
+  }
+}
