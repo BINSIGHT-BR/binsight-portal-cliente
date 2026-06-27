@@ -51,6 +51,7 @@ import {
   fetchPortalRegistrationByUid,
   fetchPendingPortalRegistrations,
   savePortalRegistration,
+  allCnpjsFromPortalRegistration,
 } from '../utils/portalRegistration';
 import { applyDerivedFields } from '../utils/orderCalculations';
 import { formatBRLForSheet, parseBRLnum } from '../utils/brl';
@@ -91,6 +92,8 @@ interface AuthContextValue {
     nomeContato: string;
     sobrenomeContato: string;
     cnpj: string;
+    additionalCnpjs?: string[];
+    cnpjs?: string[];
     notifyEmail: boolean;
   }) => Promise<void>;
   loginAsDemo: (role: MockLoginRole) => void;
@@ -240,8 +243,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         ? await fetchPortalRegistrationByUid(currentUser.uid)
         : null;
       if (reg) {
-        const cnpjNorm = normalizeCNPJ(reg.cnpj);
-        const cnpjs = reg.status === 'ATIVO' && cnpjNorm.length === 14 ? [cnpjNorm] : [];
+        const cnpjs =
+          reg.status === 'ATIVO' ? allCnpjsFromPortalRegistration(reg) : [];
         setPortalUser(buildPortalUser(reg.email, reg.nome, cnpjs, reg.notifyEmail));
         setClientStatus(
           reg.status === 'ATIVO'
@@ -331,8 +334,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }
         const reg = user.uid ? await fetchPortalRegistrationByUid(user.uid) : null;
         if (reg) {
-          const cnpjNorm = normalizeCNPJ(reg.cnpj);
-        const cnpjs = reg.status === 'ATIVO' && cnpjNorm.length === 14 ? [cnpjNorm] : [];
+          const cnpjs =
+            reg.status === 'ATIVO' ? allCnpjsFromPortalRegistration(reg) : [];
           setPortalUser(buildPortalUser(reg.email, reg.nome, cnpjs, reg.notifyEmail));
           const status =
             reg.status === 'ATIVO'
@@ -483,6 +486,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     nomeContato: string;
     sobrenomeContato: string;
     cnpj: string;
+    additionalCnpjs?: string[];
+    cnpjs?: string[];
     notifyEmail: boolean;
   }) => {
     setIsLoggingIn(true);
@@ -498,6 +503,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         nomeContato: payload.nomeContato,
         sobrenomeContato: payload.sobrenomeContato,
         cnpj: payload.cnpj,
+        additionalCnpjs: payload.additionalCnpjs,
         notifyEmail: payload.notifyEmail,
       });
       const idToken = await u.getIdToken();

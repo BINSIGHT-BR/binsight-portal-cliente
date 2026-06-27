@@ -1,8 +1,9 @@
 import { FormEvent, useMemo, useState } from 'react';
 import { Bell, Loader2, Send } from 'lucide-react';
+import CnpjListFields from './CnpjListFields';
 import { requestClientAccess } from '../utils/clientAccess';
-import { formatCNPJ } from '../utils/orders';
 import { USE_OAUTH_SHEETS } from '../constants/columns';
+import { validateCnpjInputs } from '../utils/cnpjList';
 
 interface Props {
   accessToken: string;
@@ -28,7 +29,7 @@ export default function ClientRegisterForm({
   const initial = useMemo(() => splitDisplayName(displayName), [displayName]);
   const [firstName, setFirstName] = useState(initial.first);
   const [lastName, setLastName] = useState(initial.last);
-  const [cnpj, setCnpj] = useState('');
+  const [cnpjValues, setCnpjValues] = useState(['']);
   const [notifyEmail, setNotifyEmail] = useState(true);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -39,10 +40,16 @@ export default function ClientRegisterForm({
     setLoading(true);
     setError(null);
     try {
+      const cnpjCheck = validateCnpjInputs(cnpjValues);
+      if (!cnpjCheck.ok) {
+        setError(cnpjCheck.error);
+        return;
+      }
       const nome = `${firstName.trim()} ${lastName.trim()}`.trim();
-      await requestClientAccess(accessToken, email, nome, cnpj, notifyEmail, {
+      await requestClientAccess(accessToken, email, nome, cnpjCheck.primary, notifyEmail, {
         nomeContato: firstName.trim(),
         sobrenomeContato: lastName.trim(),
+        additionalCnpjs: cnpjCheck.additional,
       });
       setSuccess(true);
       await onRegistered?.();
@@ -60,7 +67,7 @@ export default function ClientRegisterForm({
           <h2 className="text-lg font-bold text-green-800">Solicitação enviada</h2>
           <p className="text-sm text-green-700 mt-2 leading-relaxed">
             Seu cadastro foi registrado com status <strong>PENDENTE</strong>. A equipe BInsight validará
-            o CNPJ informado e liberará o acesso em breve. O financeiro foi notificado por e-mail.
+            os CNPJs informados e liberará o acesso em breve. O financeiro foi notificado por e-mail.
           </p>
           {USE_OAUTH_SHEETS && (
             <p className="text-xs text-green-700/80 mt-3">
@@ -81,8 +88,8 @@ export default function ClientRegisterForm({
         </h2>
         <p className="text-sm text-slate-500 mt-1 mb-6">
           {googleFirstAccess
-            ? 'Seu Google foi autenticado com sucesso. Informe seu nome e o CNPJ da empresa — a equipe BInsight validará seu acesso.'
-            : 'Informe seus dados e o CNPJ da empresa para acompanhar pedidos. Use o mesmo e-mail que receberá permissão nos documentos (NF/boleto).'}
+            ? 'Seu Google foi autenticado com sucesso. Informe seu nome e os CNPJs da empresa — a equipe BInsight validará seu acesso.'
+            : 'Informe seus dados e os CNPJs da empresa para acompanhar pedidos. Use o botão + para filiais adicionais.'}
         </p>
 
         {error && (
@@ -123,18 +130,7 @@ export default function ClientRegisterForm({
               />
             </div>
           </div>
-          <div>
-            <label className="block text-[10px] font-bold uppercase text-slate-400 mb-1">CNPJ da empresa</label>
-            <input
-              type="text"
-              value={cnpj}
-              onChange={(e) => setCnpj(formatCNPJ(e.target.value.replace(/\D/g, '').slice(0, 14)))}
-              placeholder="00.000.000/0000-00"
-              required
-              className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 focus:ring-2 focus:ring-purple-500 font-mono"
-            />
-            <p className="text-[10px] text-slate-400 mt-1">Com ou sem pontuação — zeros à esquerda são preservados.</p>
-          </div>
+          <CnpjListFields values={cnpjValues} onChange={setCnpjValues} />
           <label className="flex items-start gap-3 cursor-pointer rounded-xl border border-slate-100 bg-slate-50/80 p-4">
             <input
               type="checkbox"

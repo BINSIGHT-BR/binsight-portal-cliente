@@ -54,6 +54,7 @@ export async function registerPublicAccount(payload: {
   nomeContato: string;
   sobrenomeContato: string;
   cnpj: string;
+  additionalCnpjs?: string[];
   notifyEmail?: boolean;
 }): Promise<SheetLoginResult> {
   const nome = `${payload.nomeContato.trim()} ${payload.sobrenomeContato.trim()}`.trim();
@@ -69,6 +70,7 @@ export async function registerPublicAccount(payload: {
     nomeContato: payload.nomeContato.trim(),
     sobrenomeContato: payload.sobrenomeContato.trim(),
     cnpj: payload.cnpj.replace(/\D/g, ''),
+    additionalCnpjs: (payload.additionalCnpjs ?? []).map((c) => c.replace(/\D/g, '')),
     notifyEmail: payload.notifyEmail !== false,
   });
   return {

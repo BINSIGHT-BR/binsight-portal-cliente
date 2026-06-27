@@ -60,13 +60,18 @@ export async function notifyFinanceiroCadastro(payload: {
   email: string;
   nome: string;
   cnpj: string;
+  additionalCnpjs?: string[];
   notifyEmail: boolean;
 }): Promise<void> {
+  const extras = (payload.additionalCnpjs ?? [])
+    .map((c) => c.replace(/\D/g, ''))
+    .filter((c) => c.length === 14 && c !== payload.cnpj.replace(/\D/g, ''));
   await postNotifyWebApp({
     type: 'financeiro_cadastro',
     email: payload.email,
     nome: payload.nome,
     cnpj: payload.cnpj.replace(/\D/g, ''),
+    cnpjsAdicionais: extras.join(';'),
     notifyEmail: payload.notifyEmail,
   });
 }

@@ -262,10 +262,14 @@ export async function resetPasswordViaApi(email: string): Promise<string> {
   return data.message;
 }
 
-export async function registerViaApi(nome: string, cnpj: string): Promise<void> {
+export async function registerViaApi(
+  nome: string,
+  cnpj: string,
+  additionalCnpjs?: string[]
+): Promise<void> {
   await apiFetch('register', {
     method: 'POST',
-    body: JSON.stringify({ nome, cnpj }),
+    body: JSON.stringify({ nome, cnpj, additionalCnpjs }),
   });
 }
 

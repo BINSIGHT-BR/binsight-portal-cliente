@@ -1,13 +1,19 @@
 import { FormEvent, useState } from 'react';
 import { Bell, Loader2, UserPlus } from 'lucide-react';
-import { formatCNPJ } from '../utils/orders';
+import CnpjListFields from './CnpjListFields';
+import { validateCnpjInputs } from '../utils/cnpjList';
 
 export interface PublicRegisterPayload {
   email: string;
   password: string;
   nomeContato: string;
   sobrenomeContato: string;
+  /** CNPJ principal (col C). */
   cnpj: string;
+  /** CNPJs extras (col G). */
+  additionalCnpjs: string[];
+  /** Todos os CNPJs normalizados. */
+  cnpjs: string[];
   notifyEmail: boolean;
 }
 
@@ -26,7 +32,7 @@ export default function PublicRegisterForm({ onSubmit, isSubmitting, error }: Pr
   const [confirmPassword, setConfirmPassword] = useState('');
   const [firstName, setFirstName] = useState('');
   const [lastName, setLastName] = useState('');
-  const [cnpj, setCnpj] = useState('');
+  const [cnpjValues, setCnpjValues] = useState(['']);
   const [notifyEmail, setNotifyEmail] = useState(true);
   const [localError, setLocalError] = useState<string | null>(null);
 
@@ -41,12 +47,19 @@ export default function PublicRegisterForm({ onSubmit, isSubmitting, error }: Pr
       setLocalError('As senhas não coincidem.');
       return;
     }
+    const cnpjCheck = validateCnpjInputs(cnpjValues);
+    if (!cnpjCheck.ok) {
+      setLocalError(cnpjCheck.error);
+      return;
+    }
     await onSubmit({
       email: email.trim(),
       password,
       nomeContato: firstName.trim(),
       sobrenomeContato: lastName.trim(),
-      cnpj: cnpj.replace(/\D/g, ''),
+      cnpj: cnpjCheck.primary,
+      additionalCnpjs: cnpjCheck.additional,
+      cnpjs: cnpjCheck.all,
       notifyEmail,
     });
   };
@@ -99,17 +112,12 @@ export default function PublicRegisterForm({ onSubmit, isSubmitting, error }: Pr
         />
       </div>
 
-      <div>
-        <label className="block text-[10px] font-bold uppercase text-slate-400 mb-1">CNPJ da empresa</label>
-        <input
-          type="text"
-          value={cnpj}
-          onChange={(e) => setCnpj(formatCNPJ(e.target.value.replace(/\D/g, '').slice(0, 14)))}
-          placeholder="00.000.000/0000-00"
-          required
-          className={`${inputCls} font-mono`}
-        />
-      </div>
+      <CnpjListFields
+        values={cnpjValues}
+        onChange={setCnpjValues}
+        inputCls={inputCls}
+        hint="Use o botão + para cadastrar filiais ou CNPJs adicionais da mesma conta."
+      />
 
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <div>

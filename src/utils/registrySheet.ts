@@ -139,13 +139,17 @@ export async function registerClientAccess(
   nome: string,
   cnpj: string,
   notifyEmail = true,
-  contact?: { nomeContato?: string; sobrenomeContato?: string }
+  contact?: { nomeContato?: string; sobrenomeContato?: string; additionalCnpjs?: string[] }
 ): Promise<void> {
   const existing = await fetchRegistryForEmail(accessToken, email);
   if (existing) throw new Error('Já existe uma solicitação para este e-mail.');
 
   const digits = normalizeCNPJ(cnpj);
-  if (digits.length < 11) throw new Error('Informe um CNPJ válido.');
+  if (digits.length !== 14) throw new Error('Informe um CNPJ válido (14 dígitos).');
+  const extras = (contact?.additionalCnpjs ?? [])
+    .map(normalizeCNPJ)
+    .filter((s) => s.length === 14 && s !== digits)
+    .join(';');
 
   const spreadsheetId = getRegistrySpreadsheetId();
   await withTokenRetry(accessToken, async (token) => {
@@ -158,7 +162,7 @@ export async function registerClientAccess(
         'PENDENTE',
         '',
         '',
-        '',
+        extras,
         formatNotifyFlag(notifyEmail),
         (contact?.nomeContato ?? '').trim(),
         (contact?.sobrenomeContato ?? '').trim(),

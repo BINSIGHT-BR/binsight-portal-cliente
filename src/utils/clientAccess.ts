@@ -59,7 +59,7 @@ export async function requestClientAccess(
   nome: string,
   cnpj: string,
   notifyEmail = true,
-  contact?: { nomeContato?: string; sobrenomeContato?: string }
+  contact?: { nomeContato?: string; sobrenomeContato?: string; additionalCnpjs?: string[] }
 ): Promise<void> {
   if (USE_MOCK_DATA) {
     throw new Error('Cadastro indisponível em modo mock.');
@@ -71,11 +71,12 @@ export async function requestClientAccess(
       email: email.trim().toLowerCase(),
       nome,
       cnpj,
+      additionalCnpjs: contact?.additionalCnpjs,
       notifyEmail,
     });
     return;
   }
-  await registerViaApi(nome, cnpj);
+  await registerViaApi(nome, cnpj, contact?.additionalCnpjs);
 }
 
 export async function updateNotifyPreference(

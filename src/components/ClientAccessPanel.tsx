@@ -123,6 +123,7 @@ export default function ClientAccessPanel({ accessToken, adminEmail }: Props) {
           email: record.email,
           nome: record.nome,
           cnpj: record.cnpj,
+          additionalCnpjs: record.cnpjsAdicionais,
           nomeContato: record.nomeContato,
           sobrenomeContato: record.sobrenomeContato,
         });
@@ -468,8 +469,10 @@ function AccessRow({
         )}
         <p className="text-xs text-slate-500">{r.email}</p>
         <p className="text-xs font-mono text-slate-400 mt-0.5">
-          CNPJ {formatCNPJ(r.cnpj)}
-          {r.cnpjsAdicionais.length > 0 && ` + ${r.cnpjsAdicionais.length} filial(is)`}
+          {[r.cnpj, ...r.cnpjsAdicionais]
+            .filter(Boolean)
+            .map((c) => formatCNPJ(c.replace(/\D/g, '')))
+            .join(' · ')}
         </p>
       </div>
       <div className="flex flex-wrap gap-2">

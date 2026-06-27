@@ -219,7 +219,10 @@ export const clienteApi = onRequest(
         }
         const nome = String(req.body?.nome ?? auth.portalUser.displayName ?? '').trim();
         const cnpj = String(req.body?.cnpj ?? '').trim();
-        const record = await registerClientAccess(auth.email, nome, cnpj);
+        const additionalCnpjs = Array.isArray(req.body?.additionalCnpjs)
+          ? req.body.additionalCnpjs.map(String)
+          : [];
+        const record = await registerClientAccess(auth.email, nome, cnpj, additionalCnpjs);
         json(res, 200, { ok: true, record: toClientPortalUser(record) });
         return;
       }

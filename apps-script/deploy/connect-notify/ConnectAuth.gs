@@ -174,6 +174,7 @@ function authPublicRegister_(body) {
   var lastName = String(body.sobrenomeContato || body.lastName || '').trim();
   var nome = String(body.nome || '').trim() || (firstName + ' ' + lastName).trim();
   var cnpj = normalizeCnpj_(body.cnpj);
+  var extras = parseAdditionalCnpjs_(body, cnpj);
   var notifyEmail = body.notifyEmail !== false;
 
   if (!em || !password) return { ok: false, error: 'Informe e-mail e senha.' };
@@ -187,7 +188,7 @@ function authPublicRegister_(body) {
     return { ok: false, error: 'Já existe um cadastro para este e-mail. Entre ou aguarde aprovação.' };
   }
 
-  appendRegistryRow_(em, nome, cnpj, 'PENDENTE', '', '', notifyEmail, firstName, lastName);
+  appendRegistryRow_(em, nome, cnpj, 'PENDENTE', '', '', extras, notifyEmail, firstName, lastName);
   setAuthPassword_(em, password, em, false);
   logAuth_(em, 'public_register', em, cnpj);
 
@@ -209,7 +210,23 @@ function authPublicRegister_(body) {
   };
 }
 
-function appendRegistryRow_(email, nome, cnpj, status, approvedBy, approvedAt, notifyEmail, nomeContato, sobrenomeContato) {
+function parseAdditionalCnpjs_(body, primaryCnpj) {
+  var primary = normalizeCnpj_(primaryCnpj || body.cnpj);
+  var seen = {};
+  var out = [];
+  var list = body.additionalCnpjs || body.cnpjsAdicionais || [];
+  if (typeof list === 'string') list = String(list).split(/[,;]/);
+  if (!list || !list.length) return '';
+  for (var i = 0; i < list.length; i++) {
+    var c = normalizeCnpj_(list[i]);
+    if (c.length !== 14 || c === primary || seen[c]) continue;
+    seen[c] = true;
+    out.push(c);
+  }
+  return out.join(';');
+}
+
+function appendRegistryRow_(email, nome, cnpj, status, approvedBy, approvedAt, cnpjsAdicionais, notifyEmail, nomeContato, sobrenomeContato) {
   var ss = SpreadsheetApp.openById(getRegistrySpreadsheetId_());
   var sheet = ss.getSheetByName(REGISTRY_TAB) || ss.getSheetByName(REGISTRY_TAB_ALT);
   if (!sheet) throw new Error('Registry não encontrado.');
@@ -220,7 +237,7 @@ function appendRegistryRow_(email, nome, cnpj, status, approvedBy, approvedAt, n
     status || 'PENDENTE',
     approvedBy || '',
     approvedAt || '',
-    '',
+    cnpjsAdicionais || '',
     notifyEmail ? 'Sim' : 'Não',
     nomeContato || '',
     sobrenomeContato || '',

@@ -116,7 +116,8 @@ export async function fetchNotifyRecipientProfilesForCnpj(
 export async function registerClientAccess(
   email: string,
   nome: string,
-  cnpj: string
+  cnpj: string,
+  additionalCnpjs: string[] = []
 ): Promise<ClientPortalRecord> {
   const spreadsheetId = getRegistrySpreadsheetId();
   const tab = await resolveRegistryTab();
@@ -125,10 +126,14 @@ export async function registerClientAccess(
     throw new Error('Já existe uma solicitação para este e-mail.');
   }
   const digits = normalizeCNPJ(cnpj);
-  if (digits.length < 11) throw new Error('Informe um CNPJ válido.');
+  if (digits.length !== 14) throw new Error('Informe um CNPJ válido (14 dígitos).');
+  const extras = additionalCnpjs
+    .map(normalizeCNPJ)
+    .filter((s) => s.length === 14 && s !== digits)
+    .join(';');
 
   await appendSheetRows(spreadsheetId, tab, [
-    [normalizeEmail(email), nome.trim(), digits, 'PENDENTE', '', '', '', 'Sim'],
+    [normalizeEmail(email), nome.trim(), digits, 'PENDENTE', '', '', extras, 'Sim'],
   ]);
 
   const record: ClientPortalRecord = {
@@ -138,7 +143,7 @@ export async function registerClientAccess(
     status: 'PENDENTE',
     approvedBy: '',
     approvedAt: '',
-    additionalCnpjs: [],
+    additionalCnpjs: extras ? extras.split(';') : [],
     notifyEmail: true,
     rowNum: 0,
   };

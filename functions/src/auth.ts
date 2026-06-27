@@ -67,17 +67,37 @@ interface FirestorePortalReg {
   email: string;
   nome: string;
   cnpj: string;
+  cnpjsAdicionais: string[];
   status: string;
+}
+
+function parseFirestoreAdditionalCnpjs(data: Record<string, unknown>, primary: string): string[] {
+  const raw = data.cnpjsAdicionais ?? data.additionalCnpjs;
+  const set = new Set<string>();
+  if (Array.isArray(raw)) {
+    for (const item of raw) {
+      const c = normalizeCNPJ(String(item));
+      if (c.length === 14 && c !== primary) set.add(c);
+    }
+  } else if (typeof raw === 'string' && raw.trim()) {
+    for (const part of raw.split(/[,;]/)) {
+      const c = normalizeCNPJ(part.trim());
+      if (c.length === 14 && c !== primary) set.add(c);
+    }
+  }
+  return Array.from(set);
 }
 
 async function fetchFirestoreRegistration(uid: string): Promise<FirestorePortalReg | null> {
   const snap = await admin.firestore().doc(`portalRegistrations/${uid}`).get();
   if (!snap.exists) return null;
   const data = snap.data() ?? {};
+  const cnpj = normalizeCNPJ(String(data.cnpj ?? ''));
   return {
     email: String(data.email ?? '').trim().toLowerCase(),
     nome: String(data.nome ?? '').trim(),
-    cnpj: normalizeCNPJ(String(data.cnpj ?? '')),
+    cnpj,
+    cnpjsAdicionais: parseFirestoreAdditionalCnpjs(data as Record<string, unknown>, cnpj),
     status: String(data.status ?? 'PENDENTE').trim().toUpperCase(),
   };
 }
@@ -144,9 +164,13 @@ export async function authenticateRequest(req: Request): Promise<AuthContext> {
   }
 
   if (fsReg && fsReg.email === email) {
-    if (fsReg.status === 'ATIVO' && fsReg.cnpj.length === 14) {
+    if (fsReg.status === 'ATIVO') {
       clientStatus = 'ativo';
-      if (cnpjs.length === 0) cnpjs = [fsReg.cnpj];
+      if (cnpjs.length === 0) {
+        cnpjs = [fsReg.cnpj, ...fsReg.cnpjsAdicionais]
+          .map(normalizeCNPJ)
+          .filter((c) => c.length === 14);
+      }
       if (!record?.nome) displayName = fsReg.nome || displayName;
     } else if (fsReg.status === 'PENDENTE' && clientStatus === 'none') {
       clientStatus = 'pendente';
