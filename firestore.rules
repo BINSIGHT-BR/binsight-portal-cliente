@@ -1,0 +1,48 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function isBinsightStaff() {
+      return request.auth != null
+        && request.auth.token.email != null
+        && request.auth.token.email.lower().matches('.*@binsight\\.com\\.br$');
+    }
+
+    function isOwner(uid) {
+      return request.auth != null && request.auth.uid == uid;
+    }
+
+    function isFinanceOrAdmin() {
+      return request.auth != null
+        && request.auth.token.email != null
+        && (
+          request.auth.token.email.lower() == 'fernando.dantas@binsight.com.br'
+          || request.auth.token.email.lower() == 'financeiro@binsight.com.br'
+        );
+    }
+
+    match /pedidoDailyReviews/{reviewId} {
+      allow read, write: if isFinanceOrAdmin();
+    }
+
+    match /portalRegistrations/{uid} {
+      allow get: if isOwner(uid) || isBinsightStaff();
+
+      allow list: if isBinsightStaff();
+
+      allow create: if isOwner(uid)
+        && request.resource.data.uid == uid
+        && request.resource.data.status == 'PENDENTE'
+        && request.resource.data.email is string
+        && request.resource.data.email.lower() == request.auth.token.email.lower();
+
+      allow update: if isBinsightStaff()
+        || (isOwner(uid)
+            && resource.data.status == 'REVOGADO'
+            && request.resource.data.status == 'PENDENTE'
+            && request.resource.data.email.lower() == request.auth.token.email.lower());
+
+      allow delete: if false;
+    }
+  }
+}

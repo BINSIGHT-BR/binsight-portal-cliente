@@ -1,6 +1,8 @@
 import { useState } from 'react';
 import { PedidoMapa, PortalUser } from '../types';
 import { fmtBRL } from '../utils/orders';
+import { formatPctDisplay } from '../utils/brl';
+import { pedidoRefBadge } from '../utils/orderFilters';
 import { canEditOrders, seesFinancialDetails } from '../utils/roles';
 import { ChevronDown, ChevronUp, Package, Pencil, Trash2 } from 'lucide-react';
 
@@ -39,6 +41,7 @@ export default function OrderCard({ pedido: p, user, onEdit, onDelete, highlight
   const [open, setOpen] = useState(false);
   const showFinance = seesFinancialDetails(user);
   const editable = canEditOrders(user) && onEdit;
+  const pedidoRef = pedidoRefBadge(p);
 
   return (
     <div
@@ -61,9 +64,9 @@ export default function OrderCard({ pedido: p, user, onEdit, onDelete, highlight
                 NF {p.numNF}
               </span>
             )}
-            {p.numPedidoCli && (
+            {pedidoRef && (
               <span className="text-[10px] font-mono bg-purple-50 text-purple-600 px-1.5 py-0.5 rounded">
-                OC {p.numPedidoCli}
+                {pedidoRef.kind} {pedidoRef.value}
               </span>
             )}
             {p.mapaKind === 'assinatura' && (
@@ -148,7 +151,16 @@ export default function OrderCard({ pedido: p, user, onEdit, onDelete, highlight
           )}
           {showFinance && (
             <>
+              <Row
+                label="Margem %"
+                value={formatPctDisplay(p.vendaPct, {
+                  bruto: p.bruto,
+                  totalCompra: p.totalCompra,
+                  vendaTotal: p.vendaTotal,
+                })}
+              />
               <Row label="Bruto" value={fmtBRL(p.bruto)} />
+              <Row label="Líquido" value={fmtBRL(p.liquido)} />
               <Row label="Vendedor" value={p.vendedor} />
             </>
           )}

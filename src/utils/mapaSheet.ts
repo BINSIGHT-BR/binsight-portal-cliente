@@ -22,7 +22,7 @@ import {
 } from './monthlySync';
 import { applyDerivedFields } from './orderCalculations';
 import { formatBRLForSheet, parseBRLnum } from './brl';
-import { normalizeStatusPgto, pedidoToMapaRow } from './ordersCore';
+import { cellStr, isMeaningfulMapaRow, normalizeCNPJ, normalizeStatusPgto, pedidoToMapaRow } from './ordersCore';
 import { maybeNotifyPedidoChanges } from './pedidoNotify';
 
 export function parseMapaRow(
@@ -30,42 +30,44 @@ export function parseMapaRow(
   rowNum: number,
   spreadsheetId: string
 ): PedidoMapa {
-  const data = row[0] ?? '';
+  const data = cellStr(row[0]);
+  const numPedidoCli = cellStr(row[4]);
+  const numPedidoDist = cellStr(row[8]);
   return {
     rowNum,
     mapaKind: 'pedido',
     mapaSpreadsheetId: spreadsheetId,
     mapaYear: yearFromDateBR(data) ?? undefined,
     data,
-    vendedor: row[1] ?? '',
-    cnpj: row[2] ?? '',
-    nomeCliente: row[3] ?? '',
-    numPedidoCli: row[4] ?? '',
-    prioridade: row[5] ?? '',
-    descricaoProduto: row[6] ?? '',
-    distribuidor: row[7] ?? '',
-    numPedidoDist: row[8] ?? '',
-    emissao: row[9] ?? '',
-    numNF: (row[10] ?? '').trim(),
-    parc1: row[11] ?? '',
-    parc2: row[12] ?? '',
-    parc3: row[13] ?? '',
-    parc4: row[14] ?? '',
-    statusPgto: normalizeStatusPgto(row[15] ?? ''),
-    status: (row[16] ?? '').trim(),
-    qtd: row[17] ?? '',
-    custoDist: row[18] ?? '',
-    totalCompra: row[19] ?? '',
-    vendBins: row[20] ?? '',
-    vendaTotal: row[21] ?? '',
-    vendaPct: row[22] ?? '',
-    bruto: row[23] ?? '',
-    liquido: row[24] ?? '',
-    statusComissao: row[25] ?? '',
-    obsPedido: row[26] ?? '',
-    obsCliente: row[27] ?? '',
-    nfDriveUrl: row[28] ?? '',
-    boletoDriveUrl: row[29] ?? '',
+    vendedor: cellStr(row[1]),
+    cnpj: normalizeCNPJ(cellStr(row[2])),
+    nomeCliente: cellStr(row[3]),
+    numPedidoCli,
+    prioridade: cellStr(row[5]),
+    descricaoProduto: cellStr(row[6]),
+    distribuidor: cellStr(row[7]),
+    numPedidoDist: numPedidoDist || (/^bin/i.test(numPedidoCli) ? numPedidoCli : ''),
+    emissao: cellStr(row[9]),
+    numNF: cellStr(row[10]),
+    parc1: cellStr(row[11]),
+    parc2: cellStr(row[12]),
+    parc3: cellStr(row[13]),
+    parc4: cellStr(row[14]),
+    statusPgto: normalizeStatusPgto(cellStr(row[15])),
+    status: cellStr(row[16]),
+    qtd: cellStr(row[17]),
+    custoDist: cellStr(row[18]),
+    totalCompra: cellStr(row[19]),
+    vendBins: cellStr(row[20]),
+    vendaTotal: cellStr(row[21]),
+    vendaPct: cellStr(row[22]),
+    bruto: cellStr(row[23]),
+    liquido: cellStr(row[24]),
+    statusComissao: cellStr(row[25]),
+    obsPedido: cellStr(row[26]),
+    obsCliente: cellStr(row[27]),
+    nfDriveUrl: cellStr(row[28]),
+    boletoDriveUrl: cellStr(row[29]),
     observacaoCliente: '',
   };
 }
@@ -85,7 +87,7 @@ export async function fetchMapaOrdersFromSpreadsheet(
   );
   return rows
     .map((row, i) => parseMapaRow(row, i + 2, spreadsheetId))
-    .filter((p) => p.nomeCliente.trim() !== '' || p.cnpj.trim() !== '');
+    .filter(isMeaningfulMapaRow);
 }
 
 export async function fetchMapaOrders(accessToken: string): Promise<PedidoMapa[]> {
@@ -142,7 +144,8 @@ export async function updateMapaOrder(
   accessToken: string,
   pedido: PedidoMapa,
   _changedBy: string,
-  _clientOnlyObs = false
+  _clientOnlyObs = false,
+  skipNotify = false
 ): Promise<PedidoMapa> {
   const spreadsheetId = pedido.mapaSpreadsheetId ?? getMapaSpreadsheetId();
   let before: PedidoMapa | null = null;
@@ -159,14 +162,14 @@ export async function updateMapaOrder(
     before = existing;
     const previousKey = pedidoRowKeyFromPedido(existing);
 
-    const merged: PedidoMapa = {
+    const merged: PedidoMapa = applyDerivedFields({
       ...existing,
       ...pedido,
       rowNum: pedido.rowNum,
       mapaSpreadsheetId: spreadsheetId,
       mapaYear: yearFromDateBR(pedido.data ?? existing.data) ?? existing.mapaYear,
       statusPgto: normalizeStatusPgto(pedido.statusPgto ?? existing.statusPgto),
-    };
+    }) as PedidoMapa;
 
     await updateSheetRange(
       token,
@@ -184,8 +187,12 @@ export async function updateMapaOrder(
     return merged;
   });
 
-  if (before) {
-    void maybeNotifyPedidoChanges(accessToken, before, merged);
+  if (before && !skipNotify) {
+    try {
+      await maybeNotifyPedidoChanges(accessToken, before, merged);
+    } catch (err) {
+      console.warn('[mapa] Falha ao notificar cliente:', err);
+    }
   }
   return merged;
 }

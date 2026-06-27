@@ -29,7 +29,17 @@ function daysSince(date: Date): number {
   now.setHours(0, 0, 0, 0);
   const d = new Date(date);
   d.setHours(0, 0, 0, 0);
-  return Math.floor((now.getTime() - d.getTime()) / 86400000);
+  return Math.floor((now.getTime() - d.getTime()) / (86400000));
+}
+
+function isComissaoPaga(statusComissao?: string): boolean {
+  const z = (statusComissao ?? '').trim().toUpperCase();
+  return z === 'PAGA' || z.includes('PAGA');
+}
+
+function isPagamentoVencido(statusPgto: string, statusComissao?: string): boolean {
+  if (isComissaoPaga(statusComissao)) return false;
+  return statusPgto.toUpperCase().includes('VENCID');
 }
 
 export function computeAlerts(pedidos: PedidoMapa[]): ServerAlert[] {
@@ -39,7 +49,7 @@ export function computeAlerts(pedidos: PedidoMapa[]): ServerAlert[] {
     const pgto = p.statusPgto.toUpperCase();
     const ref = p.numPedidoCli || p.numNF || 'sem ref';
 
-    if (pgto.includes('VENCID')) {
+    if (isPagamentoVencido(p.statusPgto, p.statusComissao)) {
       alerts.push({
         kind: 'pagamento_vencido',
         rowNum: p.rowNum,
@@ -49,7 +59,7 @@ export function computeAlerts(pedidos: PedidoMapa[]): ServerAlert[] {
         message: `${p.nomeCliente} — parcela vencida (${ref})`,
         severity: 'critical',
       });
-    } else if (pgto.includes('A VENC') || pgto.includes('VENCER')) {
+    } else if (!isComissaoPaga(p.statusComissao) && (pgto.includes('A VENC') || pgto.includes('VENCER'))) {
       alerts.push({
         kind: 'pagamento_a_vencer',
         rowNum: p.rowNum,

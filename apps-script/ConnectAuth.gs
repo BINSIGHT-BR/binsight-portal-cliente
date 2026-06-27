@@ -8,6 +8,7 @@ var AUTH_LOG_TAB = 'CLIENT_PORTAL_AUTH_LOG';
 var REGISTRY_TAB = 'CLIENT_PORTAL_REGISTRY';
 var REGISTRY_TAB_ALT = 'CLIENT_ACCESS';
 var CONSOLIDADO_TAB = 'CONSOLIDADO';
+var ASSINATURAS_TAB = 'ASSINATURAS';
 var SESSION_HOURS = 72;
 
 function handleAuthPost_(body) {
@@ -26,6 +27,8 @@ function handleAuthPost_(body) {
       return authClientDriveFile_(body.sessionToken, body.driveUrl);
     case 'client_update_notify':
       return authUpdateNotify_(body.sessionToken, body.notifyEmail);
+    case 'public_register':
+      return authPublicRegister_(body);
     default:
       return { ok: false, error: 'Unknown auth type' };
   }
@@ -162,6 +165,66 @@ function authClientPedidos_(sessionToken) {
   var cnpjs = registryCnpjs_(registry);
   var pedidos = fetchPedidosForCnpjs_(cnpjs);
   return { ok: true, pedidos: pedidos };
+}
+
+function authPublicRegister_(body) {
+  var em = normalizeEmail_(body.email);
+  var password = String(body.password || '');
+  var firstName = String(body.nomeContato || body.firstName || '').trim();
+  var lastName = String(body.sobrenomeContato || body.lastName || '').trim();
+  var nome = String(body.nome || '').trim() || (firstName + ' ' + lastName).trim();
+  var cnpj = normalizeCnpj_(body.cnpj);
+  var notifyEmail = body.notifyEmail !== false;
+
+  if (!em || !password) return { ok: false, error: 'Informe e-mail e senha.' };
+  if (password.length < 6) return { ok: false, error: 'A senha deve ter pelo menos 6 caracteres.' };
+  if (em.indexOf('@binsight.com.br') > 0) {
+    return { ok: false, error: 'Clientes externos devem usar e-mail da empresa, não @binsight.com.br.' };
+  }
+  if (!nome) return { ok: false, error: 'Informe nome e sobrenome.' };
+  if (cnpj.length !== 14) return { ok: false, error: 'Informe um CNPJ válido (14 dígitos).' };
+  if (getRegistryRecord_(em)) {
+    return { ok: false, error: 'Já existe um cadastro para este e-mail. Entre ou aguarde aprovação.' };
+  }
+
+  appendRegistryRow_(em, nome, cnpj, 'PENDENTE', '', '', notifyEmail, firstName, lastName);
+  setAuthPassword_(em, password, em, false);
+  logAuth_(em, 'public_register', em, cnpj);
+
+  try {
+    if (typeof sendFinanceiroCadastro_ === 'function') {
+      sendFinanceiroCadastro_({ email: em, nome: nome, cnpj: cnpj, notifyEmail: notifyEmail });
+    }
+  } catch (mailErr) {
+    console.warn('financeiro notify failed', mailErr);
+  }
+
+  var registry = getRegistryRecord_(em);
+  var session = createSessionToken_(em);
+  return {
+    ok: true,
+    sessionToken: session.token,
+    expiresAt: session.expiresAt,
+    profile: buildProfile_(registry, false),
+  };
+}
+
+function appendRegistryRow_(email, nome, cnpj, status, approvedBy, approvedAt, notifyEmail, nomeContato, sobrenomeContato) {
+  var ss = SpreadsheetApp.openById(getRegistrySpreadsheetId_());
+  var sheet = ss.getSheetByName(REGISTRY_TAB) || ss.getSheetByName(REGISTRY_TAB_ALT);
+  if (!sheet) throw new Error('Registry não encontrado.');
+  sheet.appendRow([
+    email,
+    nome,
+    cnpj,
+    status || 'PENDENTE',
+    approvedBy || '',
+    approvedAt || '',
+    '',
+    notifyEmail ? 'Sim' : 'Não',
+    nomeContato || '',
+    sobrenomeContato || '',
+  ]);
 }
 
 function authUpdateNotify_(sessionToken, notifyEmail) {
@@ -373,12 +436,15 @@ function getRegistryRecord_(email) {
 
 function registryCnpjs_(registry) {
   var set = {};
-  if (registry.cnpj) set[registry.cnpj] = true;
+  if (registry.cnpj) {
+    var primary = normalizeCnpj_(registry.cnpj);
+    if (primary.length === 14) set[primary] = true;
+  }
   String(registry.cnpjsAdicionais || '')
     .split(/[,;]/)
     .forEach(function (c) {
-      var d = normalizeCnpj_(c);
-      if (d.length >= 11) set[d] = true;
+      var d = normalizeCnpj_(String(c || '').trim());
+      if (d.length === 14) set[d] = true;
     });
   return Object.keys(set);
 }
@@ -397,8 +463,11 @@ function buildProfile_(registry, mustChange) {
 function fetchPedidosForCnpjs_(cnpjs) {
   var allowed = {};
   cnpjs.forEach(function (c) {
-    allowed[normalizeCnpj_(c)] = true;
+    var n = normalizeCnpj_(c);
+    if (n.length === 14) allowed[n] = true;
   });
+  if (Object.keys(allowed).length === 0) return [];
+
   var ids = [getMapSpreadsheetId_()];
   var archive = PropertiesService.getScriptProperties().getProperty('MAP_ARCHIVE_IDS');
   if (archive) {
@@ -412,15 +481,8 @@ function fetchPedidosForCnpjs_(cnpjs) {
   ids.forEach(function (spreadsheetId) {
     try {
       var ss = SpreadsheetApp.openById(spreadsheetId);
-      var sheet = ss.getSheetByName(CONSOLIDADO_TAB);
-      if (!sheet) return;
-      var rows = sheet.getDataRange().getValues();
-      for (var r = 1; r < rows.length; r++) {
-        var row = rows[r];
-        var cnpj = normalizeCnpj_(row[2]);
-        if (!allowed[cnpj]) continue;
-        out.push(rowToPedido_(row, r + 1, spreadsheetId));
-      }
+      readConsolidadoForClient_(ss, spreadsheetId, allowed, out);
+      readAssinaturasForClient_(ss, spreadsheetId, allowed, out);
     } catch (e) {
       console.warn('map read fail', spreadsheetId, e);
     }
@@ -428,11 +490,71 @@ function fetchPedidosForCnpjs_(cnpjs) {
   return out;
 }
 
+function readConsolidadoForClient_(ss, spreadsheetId, allowed, out) {
+  var sheet = ss.getSheetByName(CONSOLIDADO_TAB);
+  if (!sheet) return;
+  var rows = sheet.getDataRange().getValues();
+  for (var r = 1; r < rows.length; r++) {
+    var row = rows[r];
+    var cnpj = normalizeCnpj_(row[2]);
+    if (cnpj.length !== 14 || !allowed[cnpj]) continue;
+    out.push(rowToPedido_(row, r + 1, spreadsheetId));
+  }
+}
+
+function readAssinaturasForClient_(ss, spreadsheetId, allowed, out) {
+  var sheet = ss.getSheetByName(ASSINATURAS_TAB);
+  if (!sheet) return;
+  var rows = sheet.getDataRange().getValues();
+  for (var r = 1; r < rows.length; r++) {
+    var row = rows[r];
+    var cnpj = normalizeCnpj_(row[2]);
+    if (cnpj.length !== 14 || !allowed[cnpj]) continue;
+    out.push(rowToAssinatura_(row, r + 1, spreadsheetId));
+  }
+}
+
+function rowToAssinatura_(row, rowNum, spreadsheetId) {
+  var data = String(row[0] || '');
+  var year = new Date().getFullYear();
+  var m = data.match(/(\d{4})/);
+  if (m) year = parseInt(m[1], 10);
+  var venc = String(row[13] || '').trim();
+  return {
+    mapaKind: 'assinatura',
+    rowNum: rowNum,
+    mapaYear: year,
+    mapaSpreadsheetId: spreadsheetId,
+    data: data,
+    vendedor: String(row[1] || ''),
+    cnpj: normalizeCnpj_(row[2]),
+    nomeCliente: String(row[3] || ''),
+    numPedidoCli: String(row[7] || ''),
+    descricaoProduto: String(row[11] || ''),
+    distribuidor: String(row[8] || ''),
+    numContratoDist: String(row[12] || ''),
+    emissao: String(row[9] || ''),
+    numNF: String(row[10] || ''),
+    vencimento: venc,
+    parc1: venc,
+    statusPgto: String(row[14] || ''),
+    status: String(row[15] || ''),
+    statusComissao: String(row[22] || ''),
+    tipoRecorrencia: String(row[4] || ''),
+    statusContrato: String(row[5] || ''),
+    periodicidade: String(row[6] || ''),
+    vendaTotal: String(row[20] || ''),
+  };
+}
+
 function rowToPedido_(row, rowNum, spreadsheetId) {
   var data = String(row[0] || '');
   var year = new Date().getFullYear();
   var m = data.match(/(\d{4})/);
   if (m) year = parseInt(m[1], 10);
+  var numPedidoCli = String(row[4] || '');
+  var numPedidoDist = String(row[8] || '');
+  if (!numPedidoDist && /^bin/i.test(numPedidoCli)) numPedidoDist = numPedidoCli;
   return {
     mapaKind: 'pedido',
     rowNum: rowNum,
@@ -442,11 +564,11 @@ function rowToPedido_(row, rowNum, spreadsheetId) {
     vendedor: String(row[1] || ''),
     cnpj: normalizeCnpj_(row[2]),
     nomeCliente: String(row[3] || ''),
-    numPedidoCli: String(row[4] || ''),
+    numPedidoCli: numPedidoCli,
     prioridade: String(row[5] || ''),
     descricaoProduto: String(row[6] || ''),
     distribuidor: String(row[7] || ''),
-    numPedidoDist: String(row[8] || ''),
+    numPedidoDist: numPedidoDist,
     emissao: String(row[9] || ''),
     numNF: String(row[10] || ''),
     parc1: String(row[11] || ''),
@@ -456,6 +578,7 @@ function rowToPedido_(row, rowNum, spreadsheetId) {
     statusPgto: String(row[15] || ''),
     status: String(row[16] || ''),
     qtd: String(row[17] || ''),
+    statusComissao: String(row[25] || ''),
     obsCliente: String(row[27] || ''),
     nfDriveUrl: String(row[28] || ''),
     boletoDriveUrl: String(row[29] || ''),
@@ -479,7 +602,11 @@ function normalizeEmail_(email) {
 }
 
 function normalizeCnpj_(raw) {
-  return String(raw || '').replace(/\D/g, '');
+  var digits = String(raw || '').replace(/\D/g, '');
+  if (!digits) return '';
+  if (digits.length < 14) digits = ('00000000000000' + digits).slice(-14);
+  else if (digits.length > 14) digits = digits.slice(-14);
+  return digits;
 }
 
 function parseNotify_(raw) {

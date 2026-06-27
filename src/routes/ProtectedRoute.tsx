@@ -11,7 +11,7 @@ export function ProtectedRoute() {
 
   if (portalUser.role === 'cliente') {
     const path = location.pathname;
-    const allowedWhilePending = ['/aguardando', '/perfil'];
+    const allowedWhilePending = ['/aguardando'];
     if (clientStatus === 'none' && path !== '/cadastro') {
       return <Navigate to="/cadastro" replace />;
     }

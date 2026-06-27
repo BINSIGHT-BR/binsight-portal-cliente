@@ -9,7 +9,10 @@ import {
   KeyRound,
   Pencil,
   Trash2,
+  Eye,
 } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import { useAuth } from '../contexts/AuthContext';
 import {
   createClientAccessManual,
   deleteClientAccess,
@@ -18,8 +21,16 @@ import {
   setClientAccessStatus,
   updateClientAccess,
 } from '../utils/clientAccess';
+import {
+  fetchPendingPortalRegistrations,
+  portalRegistrationToAccessRecord,
+  setPortalRegistrationStatus,
+} from '../utils/portalRegistration';
 import { ClientAccessRecord } from '../types';
 import { formatCNPJ } from '../utils/orders';
+import { formatSheetsAccessError } from '../utils/sheetsErrors';
+import { isGoogleSheetsAccessToken } from '../utils/googleAccessToken';
+import { contactNamesFromRecord, displayContactName } from '../utils/clientContact';
 
 interface Props {
   accessToken: string;
@@ -27,6 +38,8 @@ interface Props {
 }
 
 export default function ClientAccessPanel({ accessToken, adminEmail }: Props) {
+  const { startClientPreview, canUseClientPreview, refreshPendingAccessCount } = useAuth();
+  const navigate = useNavigate();
   const [records, setRecords] = useState<ClientAccessRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -34,20 +47,67 @@ export default function ClientAccessPanel({ accessToken, adminEmail }: Props) {
   const [actionEmail, setActionEmail] = useState<string | null>(null);
   const [showAdd, setShowAdd] = useState(false);
   const [editEmail, setEditEmail] = useState<string | null>(null);
-  const [form, setForm] = useState({ email: '', nome: '', cnpj: '', extras: '' });
+  const [form, setForm] = useState({
+    email: '',
+    nome: '',
+    nomeContato: '',
+    sobrenomeContato: '',
+    cnpj: '',
+    extras: '',
+  });
+
+  const resetForm = () =>
+    setForm({ email: '', nome: '', nomeContato: '', sobrenomeContato: '', cnpj: '', extras: '' });
+
+  const fillFormFromRecord = (r: ClientAccessRecord) => {
+    const { first, last } = contactNamesFromRecord(r);
+    setForm({
+      email: r.email,
+      nome: r.nome,
+      nomeContato: first,
+      sobrenomeContato: last,
+      cnpj: r.cnpj,
+      extras: r.cnpjsAdicionais.join('; '),
+    });
+  };
 
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const data = await fetchClientAccessRecords(accessToken);
-      setRecords(data);
+      let data: ClientAccessRecord[] = [];
+      let sheetError: string | null = null;
+
+      if (!isGoogleSheetsAccessToken(accessToken)) {
+        sheetError = formatSheetsAccessError(new Error('403 PERMISSION_DENIED'));
+      } else {
+        try {
+          data = await fetchClientAccessRecords(accessToken);
+        } catch (err) {
+          sheetError = formatSheetsAccessError(err);
+        }
+      }
+
+      const firestorePending = await fetchPendingPortalRegistrations().catch(() => []);
+      const merged = [...data];
+      for (const reg of firestorePending) {
+        if (!merged.some((r) => r.email === reg.email)) {
+          merged.push(portalRegistrationToAccessRecord(reg));
+        }
+      }
+      setRecords(merged);
+      if (sheetError && merged.length === 0) {
+        setError(sheetError);
+      } else if (sheetError) {
+        setError(`${sheetError}\n\nCadastros do portal (Firestore) aparecem abaixo; a planilha Registry ainda não carregou.`);
+      }
+      await refreshPendingAccessCount();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Erro ao carregar acessos.');
+      setError(formatSheetsAccessError(err));
     } finally {
       setLoading(false);
     }
-  }, [accessToken]);
+  }, [accessToken, refreshPendingAccessCount]);
 
   useEffect(() => {
     load();
@@ -57,7 +117,21 @@ export default function ClientAccessPanel({ accessToken, adminEmail }: Props) {
     setActionEmail(email);
     setSuccess(null);
     try {
-      await setClientAccessStatus(accessToken, email, status, adminEmail);
+      const record = records.find((r) => r.email === email);
+      if (record?.firestoreUid && status === 'ATIVO') {
+        await createClientAccessManual(accessToken, {
+          email: record.email,
+          nome: record.nome,
+          cnpj: record.cnpj,
+          nomeContato: record.nomeContato,
+          sobrenomeContato: record.sobrenomeContato,
+        });
+        await setPortalRegistrationStatus(record.firestoreUid, 'ATIVO', adminEmail);
+      } else if (record?.firestoreUid && status === 'REVOGADO') {
+        await setPortalRegistrationStatus(record.firestoreUid, 'REVOGADO', adminEmail);
+      } else {
+        await setClientAccessStatus(accessToken, email, status, adminEmail);
+      }
       await load();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Erro ao atualizar.');
@@ -87,6 +161,8 @@ export default function ClientAccessPanel({ accessToken, adminEmail }: Props) {
       await createClientAccessManual(accessToken, {
         email: form.email,
         nome: form.nome,
+        nomeContato: form.nomeContato.trim(),
+        sobrenomeContato: form.sobrenomeContato.trim(),
         cnpj: form.cnpj.replace(/\D/g, ''),
         additionalCnpjs: form.extras
           .split(/[,;]/)
@@ -94,7 +170,7 @@ export default function ClientAccessPanel({ accessToken, adminEmail }: Props) {
           .filter(Boolean),
       });
       setShowAdd(false);
-      setForm({ email: '', nome: '', cnpj: '', extras: '' });
+      resetForm();
       await load();
       setSuccess('Cliente adicionado.');
     } catch (err) {
@@ -111,6 +187,8 @@ export default function ClientAccessPanel({ accessToken, adminEmail }: Props) {
     try {
       await updateClientAccess(accessToken, editEmail, {
         nome: form.nome,
+        nomeContato: form.nomeContato.trim(),
+        sobrenomeContato: form.sobrenomeContato.trim(),
         cnpj: form.cnpj.replace(/\D/g, ''),
         additionalCnpjs: form.extras
           .split(/[,;]/)
@@ -141,6 +219,11 @@ export default function ClientAccessPanel({ accessToken, adminEmail }: Props) {
     }
   };
 
+  const handlePreview = (record: ClientAccessRecord) => {
+    startClientPreview(record);
+    navigate('/pedidos');
+  };
+
   const pendentes = records.filter((r) => r.status === 'PENDENTE');
   const ativos = records.filter((r) => r.status === 'ATIVO');
   const revogados = records.filter((r) => r.status === 'REVOGADO');
@@ -151,7 +234,7 @@ export default function ClientAccessPanel({ accessToken, adminEmail }: Props) {
         <button
           onClick={() => {
             setShowAdd(true);
-            setForm({ email: '', nome: '', cnpj: '', extras: '' });
+            resetForm();
           }}
           className="inline-flex items-center gap-2 px-3 py-2 text-xs font-bold text-white bg-purple-700 rounded-lg"
         >
@@ -169,10 +252,30 @@ export default function ClientAccessPanel({ accessToken, adminEmail }: Props) {
       </div>
 
       {error && (
-        <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-xs text-red-700">{error}</div>
+        <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-xs text-red-700 whitespace-pre-line">
+          {error}
+        </div>
       )}
       {success && (
         <div className="rounded-lg border border-green-200 bg-green-50 p-3 text-xs text-green-700">{success}</div>
+      )}
+
+      {pendentes.length > 0 && (
+        <div className="rounded-xl border-2 border-amber-300 bg-amber-50 px-4 py-3 flex items-center gap-3">
+          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-amber-500 text-white text-sm font-bold">
+            {pendentes.length}
+          </span>
+          <div>
+            <p className="text-sm font-bold text-amber-900">
+              {pendentes.length === 1
+                ? '1 cadastro aguardando aprovação'
+                : `${pendentes.length} cadastros aguardando aprovação`}
+            </p>
+            <p className="text-xs text-amber-800/80">
+              Revise CNPJ e e-mail abaixo e clique em Aprovar para liberar o portal.
+            </p>
+          </div>
+        </div>
       )}
 
       {pendentes.length > 0 && (
@@ -187,12 +290,7 @@ export default function ClientAccessPanel({ accessToken, adminEmail }: Props) {
               onReset={() => handleReset(r.email)}
               onEdit={() => {
                 setEditEmail(r.email);
-                setForm({
-                  email: r.email,
-                  nome: r.nome,
-                  cnpj: r.cnpj,
-                  extras: r.cnpjsAdicionais.join('; '),
-                });
+                fillFormFromRecord(r);
               }}
               onDelete={() => handleDelete(r.email)}
             />
@@ -211,16 +309,12 @@ export default function ClientAccessPanel({ accessToken, adminEmail }: Props) {
               key={r.email}
               record={r}
               busy={actionEmail === r.email}
+              onPreview={canUseClientPreview ? () => handlePreview(r) : undefined}
               onRevoke={() => handleStatus(r.email, 'REVOGADO')}
               onReset={() => handleReset(r.email)}
               onEdit={() => {
                 setEditEmail(r.email);
-                setForm({
-                  email: r.email,
-                  nome: r.nome,
-                  cnpj: r.cnpj,
-                  extras: r.cnpjsAdicionais.join('; '),
-                });
+                fillFormFromRecord(r);
               }}
               onDelete={() => handleDelete(r.email)}
             />
@@ -254,7 +348,7 @@ export default function ClientAccessPanel({ accessToken, adminEmail }: Props) {
             {!editEmail && (
               <input
                 type="email"
-                placeholder="E-mail Google"
+                placeholder="E-mail"
                 value={form.email}
                 onChange={(e) => setForm((f) => ({ ...f, email: e.target.value }))}
                 required
@@ -263,12 +357,28 @@ export default function ClientAccessPanel({ accessToken, adminEmail }: Props) {
             )}
             <input
               type="text"
-              placeholder="Nome / razão social"
+              placeholder="Empresa / razão social"
               value={form.nome}
               onChange={(e) => setForm((f) => ({ ...f, nome: e.target.value }))}
               required
               className="w-full text-sm border rounded-lg px-3 py-2"
             />
+            <div className="grid grid-cols-2 gap-2">
+              <input
+                type="text"
+                placeholder="Nome"
+                value={form.nomeContato}
+                onChange={(e) => setForm((f) => ({ ...f, nomeContato: e.target.value }))}
+                className="w-full text-sm border rounded-lg px-3 py-2"
+              />
+              <input
+                type="text"
+                placeholder="Sobrenome"
+                value={form.sobrenomeContato}
+                onChange={(e) => setForm((f) => ({ ...f, sobrenomeContato: e.target.value }))}
+                className="w-full text-sm border rounded-lg px-3 py-2"
+              />
+            </div>
             <input
               type="text"
               placeholder="CNPJ"
@@ -336,6 +446,7 @@ function AccessRow({
   onReset,
   onEdit,
   onDelete,
+  onPreview,
 }: {
   record: ClientAccessRecord;
   busy: boolean;
@@ -344,11 +455,17 @@ function AccessRow({
   onReset?: () => void;
   onEdit?: () => void;
   onDelete?: () => void;
+  onPreview?: () => void;
 }) {
   return (
     <div className="bg-white border border-slate-200 rounded-xl px-4 py-3 flex flex-col sm:flex-row sm:items-center gap-3">
       <div className="flex-1 min-w-0">
-        <p className="text-sm font-bold text-slate-800">{r.nome || r.email}</p>
+        <p className="text-sm font-bold text-slate-800">{r.nome || displayContactName(r)}</p>
+        {(r.nomeContato || r.sobrenomeContato) && (
+          <p className="text-xs text-slate-600">
+            {`${r.nomeContato ?? ''} ${r.sobrenomeContato ?? ''}`.trim()}
+          </p>
+        )}
         <p className="text-xs text-slate-500">{r.email}</p>
         <p className="text-xs font-mono text-slate-400 mt-0.5">
           CNPJ {formatCNPJ(r.cnpj)}
@@ -356,6 +473,16 @@ function AccessRow({
         </p>
       </div>
       <div className="flex flex-wrap gap-2">
+        {onPreview && (
+          <ActionBtn
+            onClick={onPreview}
+            disabled={busy}
+            className="text-indigo-700 bg-indigo-50"
+            title="Ver como cliente"
+          >
+            <Eye className="w-3.5 h-3.5" />
+          </ActionBtn>
+        )}
         {onApprove && (
           <ActionBtn onClick={onApprove} disabled={busy} className="text-green-700 bg-green-50">
             Aprovar
@@ -391,16 +518,19 @@ function ActionBtn({
   onClick,
   disabled,
   className,
+  title,
 }: {
   children: ReactNode;
   onClick: () => void;
   disabled: boolean;
   className: string;
+  title?: string;
 }) {
   return (
     <button
       onClick={onClick}
       disabled={disabled}
+      title={title}
       className={`px-3 py-1.5 text-xs font-bold rounded-lg flex items-center gap-1 disabled:opacity-50 ${className}`}
     >
       {children}

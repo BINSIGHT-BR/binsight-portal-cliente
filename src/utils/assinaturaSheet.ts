@@ -17,7 +17,7 @@ import {
 } from './googleSheets';
 import { applyDerivedFields } from './orderCalculations';
 import { formatBRLForSheet, parseBRLnum } from './brl';
-import { deriveStatusPgtoFromDates, normalizeStatusPgto } from './ordersCore';
+import { cellStr, deriveStatusPgtoFromDates, isMeaningfulMapaRow, normalizeCNPJ, normalizeStatusPgto } from './ordersCore';
 import { maybeNotifyPedidoChanges } from './pedidoNotify';
 
 export function parseAssinaturaRow(
@@ -25,45 +25,45 @@ export function parseAssinaturaRow(
   rowNum: number,
   spreadsheetId: string
 ): PedidoMapa {
-  const data = row[0] ?? '';
-  const vencimento = String(row[13] ?? '').trim();
+  const data = cellStr(row[0]);
+  const vencimento = cellStr(row[13]);
   return {
     mapaKind: 'assinatura',
     rowNum,
     mapaSpreadsheetId: spreadsheetId,
     mapaYear: yearFromDateBR(data) ?? undefined,
     data,
-    vendedor: row[1] ?? '',
-    cnpj: row[2] ?? '',
-    nomeCliente: row[3] ?? '',
-    tipoRecorrencia: row[4] ?? '',
-    statusContrato: row[5] ?? '',
-    periodicidade: row[6] ?? '',
-    numPedidoCli: row[7] ?? '',
+    vendedor: cellStr(row[1]),
+    cnpj: normalizeCNPJ(cellStr(row[2])),
+    nomeCliente: cellStr(row[3]),
+    tipoRecorrencia: cellStr(row[4]),
+    statusContrato: cellStr(row[5]),
+    periodicidade: cellStr(row[6]),
+    numPedidoCli: cellStr(row[7]),
     prioridade: '',
-    descricaoProduto: row[11] ?? '',
-    distribuidor: row[8] ?? '',
+    descricaoProduto: cellStr(row[11]),
+    distribuidor: cellStr(row[8]),
     numPedidoDist: '',
-    numContratoDist: row[12] ?? '',
-    emissao: row[9] ?? '',
-    numNF: (row[10] ?? '').trim(),
+    numContratoDist: cellStr(row[12]),
+    emissao: cellStr(row[9]),
+    numNF: cellStr(row[10]),
     vencimento,
     parc1: vencimento,
     parc2: '',
     parc3: '',
     parc4: '',
-    statusPgto: normalizeStatusPgto(row[14] ?? ''),
-    status: (row[15] ?? '').trim(),
-    qtd: row[16] ?? '',
-    custoDist: row[17] ?? '',
-    totalCompra: row[18] ?? '',
-    vendBins: row[19] ?? '',
-    vendaTotal: row[20] ?? '',
+    statusPgto: normalizeStatusPgto(cellStr(row[14])),
+    status: cellStr(row[15]),
+    qtd: cellStr(row[16]),
+    custoDist: cellStr(row[17]),
+    totalCompra: cellStr(row[18]),
+    vendBins: cellStr(row[19]),
+    vendaTotal: cellStr(row[20]),
     vendaPct: '',
-    bruto: row[21] ?? '',
+    bruto: cellStr(row[21]),
     liquido: '',
-    statusComissao: row[22] ?? '',
-    obsPedido: row[23] ?? '',
+    statusComissao: cellStr(row[22]),
+    obsPedido: cellStr(row[23]),
     obsCliente: '',
     nfDriveUrl: '',
     boletoDriveUrl: '',
@@ -118,7 +118,7 @@ export async function fetchAssinaturaOrdersFromSpreadsheet(
   );
   return rows
     .map((row, i) => parseAssinaturaRow(row, i + 2, spreadsheetId))
-    .filter((p) => p.nomeCliente.trim() !== '' || p.cnpj.trim() !== '');
+    .filter((p) => isMeaningfulMapaRow(p) && normalizeCNPJ(p.cnpj).length === 14);
 }
 
 export async function fetchAssinaturaOrders(accessToken: string): Promise<PedidoMapa[]> {

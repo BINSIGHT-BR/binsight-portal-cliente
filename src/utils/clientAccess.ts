@@ -58,13 +58,14 @@ export async function requestClientAccess(
   email: string,
   nome: string,
   cnpj: string,
-  notifyEmail = true
+  notifyEmail = true,
+  contact?: { nomeContato?: string; sobrenomeContato?: string }
 ): Promise<void> {
   if (USE_MOCK_DATA) {
     throw new Error('Cadastro indisponível em modo mock.');
   }
   if (USE_OAUTH_SHEETS) {
-    await registerClientAccess(accessToken, email, nome, cnpj, notifyEmail);
+    await registerClientAccess(accessToken, email, nome, cnpj, notifyEmail, contact);
     const { notifyFinanceiroCadastro } = await import('./notifyService');
     void notifyFinanceiroCadastro({
       email: email.trim().toLowerCase(),
@@ -116,6 +117,8 @@ export async function createClientAccessManual(
     nome: string;
     cnpj: string;
     additionalCnpjs?: string[];
+    nomeContato?: string;
+    sobrenomeContato?: string;
   }
 ): Promise<void> {
   if (USE_MOCK_DATA) return;
@@ -134,6 +137,8 @@ export async function updateClientAccess(
     cnpj?: string;
     additionalCnpjs?: string[];
     status?: ClientAccessStatus;
+    nomeContato?: string;
+    sobrenomeContato?: string;
   }
 ): Promise<void> {
   if (USE_MOCK_DATA) return;

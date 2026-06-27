@@ -12,6 +12,7 @@ import {
   withTokenRetry,
 } from './googleSheets';
 import { normalizeCNPJ } from './orders';
+import { displayContactName } from './clientContact';
 
 function normalizeEmail(email: string): string {
   return email.trim().toLowerCase();
@@ -39,7 +40,7 @@ function parseRow(row: string[]): ClientAccessRecord | null {
   const extras = String(row[6] ?? '')
     .split(/[,;]/)
     .map((s) => normalizeCNPJ(s.trim()))
-    .filter((s) => s.length >= 11);
+    .filter((s) => s.length === 14);
   return {
     email,
     nome: String(row[1] ?? '').trim(),
@@ -49,10 +50,12 @@ function parseRow(row: string[]): ClientAccessRecord | null {
     dataAprovacao: String(row[5] ?? '').trim(),
     cnpjsAdicionais: extras,
     notifyEmail: parseNotifyFlag(String(row[7] ?? '')),
+    nomeContato: String(row[8] ?? '').trim(),
+    sobrenomeContato: String(row[9] ?? '').trim(),
   };
 }
 
-const REGISTRY_DATA_RANGE = 'A2:H2000';
+const REGISTRY_DATA_RANGE = 'A2:J2000';
 
 async function resolveRegistryTab(accessToken: string): Promise<string> {
   const spreadsheetId = getRegistrySpreadsheetId();
@@ -85,13 +88,29 @@ export async function fetchNotifyRecipientsForCnpj(
   accessToken: string,
   cnpj: string
 ): Promise<string[]> {
+  const profiles = await fetchNotifyRecipientProfilesForCnpj(accessToken, cnpj);
+  return profiles.map((p) => p.email);
+}
+
+export interface NotifyRecipientProfile {
+  email: string;
+  displayName: string;
+}
+
+/** Destinatários com nome cadastrado (cols I/J ou col B) para saudação no e-mail. */
+export async function fetchNotifyRecipientProfilesForCnpj(
+  accessToken: string,
+  cnpj: string
+): Promise<NotifyRecipientProfile[]> {
   const digits = normalizeCNPJ(cnpj);
   if (digits.length < 11) return [];
   const records = await fetchRegistryRecords(accessToken);
-  const out: string[] = [];
+  const out: NotifyRecipientProfile[] = [];
   for (const r of records) {
     if (r.status !== 'ATIVO' || !r.notifyEmail) continue;
-    if (allCnpjsFromRecord(r).includes(digits)) out.push(r.email);
+    if (allCnpjsFromRecord(r).includes(digits)) {
+      out.push({ email: r.email, displayName: displayContactName(r) });
+    }
   }
   return out;
 }
@@ -119,7 +138,8 @@ export async function registerClientAccess(
   email: string,
   nome: string,
   cnpj: string,
-  notifyEmail = true
+  notifyEmail = true,
+  contact?: { nomeContato?: string; sobrenomeContato?: string }
 ): Promise<void> {
   const existing = await fetchRegistryForEmail(accessToken, email);
   if (existing) throw new Error('Já existe uma solicitação para este e-mail.');
@@ -140,6 +160,8 @@ export async function registerClientAccess(
         '',
         '',
         formatNotifyFlag(notifyEmail),
+        (contact?.nomeContato ?? '').trim(),
+        (contact?.sobrenomeContato ?? '').trim(),
       ],
     ]);
   });
@@ -158,7 +180,7 @@ export async function updateNotifyPreference(
     const rows = await fetchSheetRange(
       token,
       spreadsheetId,
-      `${loc.tab}!A${loc.rowNum}:H${loc.rowNum}`
+      `${loc.tab}!A${loc.rowNum}:J${loc.rowNum}`
     );
     const row = rows[0] ?? [];
     while (row.length < 8) row.push('');
@@ -166,7 +188,7 @@ export async function updateNotifyPreference(
     await updateSheetRange(
       token,
       spreadsheetId,
-      `${loc.tab}!A${loc.rowNum}:H${loc.rowNum}`,
+      `${loc.tab}!A${loc.rowNum}:J${loc.rowNum}`,
       [row]
     );
   });
@@ -186,7 +208,7 @@ export async function setClientAccessStatus(
     const rows = await fetchSheetRange(
       token,
       spreadsheetId,
-      `${loc.tab}!A${loc.rowNum}:H${loc.rowNum}`
+      `${loc.tab}!A${loc.rowNum}:J${loc.rowNum}`
     );
     const row = rows[0] ?? [];
     row[3] = status;
@@ -197,7 +219,7 @@ export async function setClientAccessStatus(
     await updateSheetRange(
       token,
       spreadsheetId,
-      `${loc.tab}!A${loc.rowNum}:H${loc.rowNum}`,
+      `${loc.tab}!A${loc.rowNum}:J${loc.rowNum}`,
       [row]
     );
   });
@@ -211,16 +233,18 @@ export async function createRegistryRecordManual(
     cnpj: string;
     additionalCnpjs?: string[];
     notifyEmail?: boolean;
+    nomeContato?: string;
+    sobrenomeContato?: string;
   }
 ): Promise<void> {
   const existing = await fetchRegistryForEmail(accessToken, payload.email);
   if (existing) throw new Error('Já existe um registro para este e-mail.');
 
   const digits = normalizeCNPJ(payload.cnpj);
-  if (digits.length < 11) throw new Error('Informe um CNPJ válido.');
+  if (digits.length !== 14) throw new Error('Informe um CNPJ válido (14 dígitos).');
   const extras = (payload.additionalCnpjs ?? [])
     .map(normalizeCNPJ)
-    .filter((s) => s.length >= 11)
+    .filter((s) => s.length === 14)
     .join(';');
 
   const spreadsheetId = getRegistrySpreadsheetId();
@@ -236,6 +260,8 @@ export async function createRegistryRecordManual(
         '',
         extras,
         formatNotifyFlag(payload.notifyEmail !== false),
+        (payload.nomeContato ?? '').trim(),
+        (payload.sobrenomeContato ?? '').trim(),
       ],
     ]);
   });
@@ -250,6 +276,8 @@ export async function updateRegistryRecord(
     additionalCnpjs?: string[];
     status?: ClientAccessStatus;
     notifyEmail?: boolean;
+    nomeContato?: string;
+    sobrenomeContato?: string;
   }
 ): Promise<void> {
   const loc = await findRegistryRowNum(accessToken, email);
@@ -260,20 +288,23 @@ export async function updateRegistryRecord(
     const rows = await fetchSheetRange(
       token,
       spreadsheetId,
-      `${loc.tab}!A${loc.rowNum}:H${loc.rowNum}`
+      `${loc.tab}!A${loc.rowNum}:J${loc.rowNum}`
     );
     const row = rows[0] ?? [];
+    while (row.length < 10) row.push('');
     if (payload.nome !== undefined) row[1] = payload.nome;
     if (payload.cnpj !== undefined) row[2] = normalizeCNPJ(payload.cnpj);
     if (payload.status !== undefined) row[3] = payload.status;
     if (payload.additionalCnpjs !== undefined) {
-      row[6] = payload.additionalCnpjs.map(normalizeCNPJ).filter((s) => s.length >= 11).join(';');
+      row[6] = payload.additionalCnpjs.map(normalizeCNPJ).filter((s) => s.length === 14).join(';');
     }
     if (payload.notifyEmail !== undefined) row[7] = formatNotifyFlag(payload.notifyEmail);
+    if (payload.nomeContato !== undefined) row[8] = payload.nomeContato.trim();
+    if (payload.sobrenomeContato !== undefined) row[9] = payload.sobrenomeContato.trim();
     await updateSheetRange(
       token,
       spreadsheetId,
-      `${loc.tab}!A${loc.rowNum}:H${loc.rowNum}`,
+      `${loc.tab}!A${loc.rowNum}:J${loc.rowNum}`,
       [row]
     );
   });
@@ -288,7 +319,7 @@ export async function deleteRegistryRecord(accessToken: string, email: string): 
     await updateSheetRange(
       token,
       spreadsheetId,
-      `${loc.tab}!A${loc.rowNum}:H${loc.rowNum}`,
+      `${loc.tab}!A${loc.rowNum}:J${loc.rowNum}`,
       [['', '', '', 'REVOGADO', '', '', '', '']]
     );
   });
@@ -296,7 +327,13 @@ export async function deleteRegistryRecord(accessToken: string, email: string): 
 
 export function allCnpjsFromRecord(r: ClientAccessRecord): string[] {
   const set = new Set<string>();
-  if (r.cnpj) set.add(r.cnpj);
-  for (const c of r.cnpjsAdicionais) set.add(c);
+  if (r.cnpj) {
+    const c = normalizeCNPJ(r.cnpj);
+    if (c.length === 14) set.add(c);
+  }
+  for (const raw of r.cnpjsAdicionais) {
+    const c = normalizeCNPJ(raw);
+    if (c.length === 14) set.add(c);
+  }
   return Array.from(set);
 }

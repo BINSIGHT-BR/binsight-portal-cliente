@@ -12,24 +12,30 @@ export function inferTipoProduto(descricao: string): TipoProdutoPedido {
 
 export function sanitizePedidoForClient(p: PedidoMapa): PedidoCliente {
   const ref = p.numPedidoCli.trim() || p.numNF.trim() || `row-${p.rowNum}`;
+  const kind = p.mapaKind ?? 'pedido';
+  const tabKey = p.mapaTab?.trim() || 'CONSOLIDADO';
   const id = p.mapaSpreadsheetId
-    ? `${p.mapaSpreadsheetId}-${p.rowNum}`
-    : ref;
+    ? `${p.mapaSpreadsheetId}-${tabKey}-${kind}-${p.rowNum}`
+    : `${tabKey}-${kind}-${ref}`;
   return {
     id,
     rowNum: p.rowNum,
     mapaSpreadsheetId: p.mapaSpreadsheetId,
     mapaYear: p.mapaYear ?? undefined,
+    mapaTab: p.mapaTab,
     data: p.data,
     numPedidoCli: p.numPedidoCli,
     descricaoProduto: p.descricaoProduto,
     qtd: p.qtd,
     vendaTotal: p.vendaTotal,
     status: p.status,
+    statusComissao: p.statusComissao,
     statusPgto: p.statusPgto,
     emissao: p.emissao,
     numNF: p.numNF,
     obsCliente: p.obsCliente,
+    distribuidor: p.distribuidor,
+    vendedor: p.vendedor,
     nfDriveUrl: p.nfDriveUrl,
     boletoDriveUrl: p.boletoDriveUrl,
     observacaoCliente: p.observacaoCliente ?? '',

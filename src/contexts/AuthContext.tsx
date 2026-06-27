@@ -11,13 +11,21 @@ import { User } from 'firebase/auth';
 import {
   formatAuthError,
   loginWithGoogle,
+  loginWithEmailPassword,
+  registerWithEmailPassword,
   logout as firebaseLogout,
   subscribeAuth,
+  isGoogleLinkedUser,
+  connectGoogleSheetsAccess,
+  hasGoogleSheetsAccess,
+  isBinsightEmail,
 } from '../utils/firebase';
+import { isGoogleSheetsAccessToken } from '../utils/googleAccessToken';
 import { PedidoMapa, PortalUser } from '../types';
 import { ClientAccessRecord } from '../types';
-import { buildPortalUser, canUseClientPreview, seesAllOrders } from '../utils/roles';
+import { buildPortalUser, canManageClientAccess, canUseClientPreview, seesAllOrders } from '../utils/roles';
 import { fetchAllOrders, filterOrdersByCnpjs } from '../utils/orders';
+import { fetchClientAccessRecords } from '../utils/clientAccess';
 import {
   loadClientPreview,
   previewFromRecord,
@@ -25,7 +33,6 @@ import {
   type ClientPreviewState,
 } from '../utils/clientPreview';
 import {
-  loginWithSheetAuth,
   validateSheetSession,
   type SheetAuthProfile,
 } from '../utils/connectPortalApi';
@@ -38,7 +45,13 @@ import { USE_MOCK_DATA, SKIP_AUTH, localDemoRole } from '../constants/columns';
 import { MOCK_CNPJ_CLIENT } from '../data/mockOrders';
 import { normalizeCNPJ } from '../utils/orders';
 import { fetchMeFromApi, type ClientStatus as ApiClientStatus } from '../utils/clienteApi';
-import { resolvePortalSession } from '../utils/authSession';
+import { usesClientBackendApi } from '../utils/clientBackendApi';
+import { resolvePortalSession, canAccessMapaDirectly } from '../utils/authSession';
+import {
+  fetchPortalRegistrationByUid,
+  fetchPendingPortalRegistrations,
+  savePortalRegistration,
+} from '../utils/portalRegistration';
 import { applyDerivedFields } from '../utils/orderCalculations';
 import { formatBRLForSheet, parseBRLnum } from '../utils/brl';
 import { USE_OAUTH_SHEETS } from '../constants/columns';
@@ -52,7 +65,7 @@ import {
 } from '../utils/mockAuth';
 
 export type ClientStatus = 'none' | 'pendente' | 'ativo' | 'revogado';
-export type AuthProvider = 'google' | 'sheet' | null;
+export type AuthProvider = 'google' | 'sheet' | 'firebase-email' | null;
 
 interface AuthContextValue {
   user: User | null;
@@ -72,6 +85,14 @@ interface AuthContextValue {
   skipAuth: boolean;
   login: () => Promise<void>;
   loginWithCredentials: (email: string, password: string) => Promise<void>;
+  registerPublicAccount: (payload: {
+    email: string;
+    password: string;
+    nomeContato: string;
+    sobrenomeContato: string;
+    cnpj: string;
+    notifyEmail: boolean;
+  }) => Promise<void>;
   loginAsDemo: (role: MockLoginRole) => void;
   logout: () => Promise<void>;
   refreshOrders: () => Promise<void>;
@@ -79,11 +100,17 @@ interface AuthContextValue {
   clearMustChangePassword: () => void;
   addMockPedido: (partial: Partial<PedidoMapa>) => void;
   clearAuthError: () => void;
+  clearOrdersError: () => void;
   clientPreview: ClientPreviewState | null;
   isViewingAsClient: boolean;
   canUseClientPreview: boolean;
   startClientPreview: (record: ClientAccessRecord) => void;
   stopClientPreview: () => void;
+  pendingAccessCount: number;
+  refreshPendingAccessCount: () => Promise<void>;
+  needsSheetsAccess: boolean;
+  connectingSheets: boolean;
+  connectSheets: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -127,9 +154,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [clientPreview, setClientPreview] = useState<ClientPreviewState | null>(() =>
     loadClientPreview()
   );
+  const [pendingAccessCount, setPendingAccessCount] = useState(0);
+  const [connectingSheets, setConnectingSheets] = useState(false);
 
   const isViewingAsClient = Boolean(clientPreview && portalUser?.role === 'admin');
   const adminCanPreview = canUseClientPreview(portalUser);
+
+  const needsSheetsAccess = Boolean(
+    USE_OAUTH_SHEETS &&
+      !USE_MOCK_DATA &&
+      authProvider === 'google' &&
+      portalUser &&
+      user &&
+      isGoogleLinkedUser(user) &&
+      (!hasGoogleSheetsAccess()) &&
+      (canAccessMapaDirectly(portalUser.email) || clientStatus === 'ativo')
+  );
 
   const startClientPreview = useCallback((record: ClientAccessRecord) => {
     const preview = previewFromRecord(record);
@@ -171,7 +211,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setAuthProvider(null);
   }, []);
 
-  const resolveUserContext = useCallback(async (currentUser: User, _accessToken: string) => {
+  const resolveUserContext = useCallback(async (currentUser: User, _accessToken: string, provider: AuthProvider) => {
     const email = currentUser.email ?? '';
 
     if (USE_MOCK_DATA) {
@@ -184,6 +224,36 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         buildPortalUser(email, currentUser.displayName ?? email, [MOCK_CNPJ_CLIENT])
       );
       setClientStatus('ativo');
+      return;
+    }
+
+    if (!isBinsightEmail(email)) {
+      try {
+        const me = await fetchMeFromApi();
+        setPortalUser(me.portalUser);
+        setClientStatus(me.clientStatus);
+        return;
+      } catch {
+        /* fallback Firestore */
+      }
+      const reg = currentUser.uid
+        ? await fetchPortalRegistrationByUid(currentUser.uid)
+        : null;
+      if (reg) {
+        const cnpjNorm = normalizeCNPJ(reg.cnpj);
+        const cnpjs = reg.status === 'ATIVO' && cnpjNorm.length === 14 ? [cnpjNorm] : [];
+        setPortalUser(buildPortalUser(reg.email, reg.nome, cnpjs, reg.notifyEmail));
+        setClientStatus(
+          reg.status === 'ATIVO'
+            ? 'ativo'
+            : reg.status === 'REVOGADO'
+              ? 'revogado'
+              : 'pendente'
+        );
+        return;
+      }
+      setPortalUser(buildPortalUser(email, currentUser.displayName ?? email));
+      setClientStatus('none');
       return;
     }
 
@@ -203,14 +273,28 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (!portalUser) return;
     if (portalUser.role === 'cliente' && clientStatus !== 'ativo') return;
 
+    const useBackendApi = usesClientBackendApi(user);
+
+    if (
+      !useBackendApi &&
+      USE_OAUTH_SHEETS &&
+      authProvider === 'google' &&
+      !hasGoogleSheetsAccess() &&
+      (canAccessMapaDirectly(portalUser.email) || clientStatus === 'ativo')
+    ) {
+      setOrdersError(null);
+      setPedidos([]);
+      return;
+    }
+
     setLoadingOrders(true);
     setOrdersError(null);
     try {
-      const all = await fetchAllOrders(token ?? '', undefined, portalUser);
+      const all = await fetchAllOrders(token ?? '', undefined, portalUser, useBackendApi);
       let visible = all;
       if (clientPreview && portalUser.role === 'admin') {
         visible = filterOrdersByCnpjs(all, clientPreview.cnpjs);
-      } else if (!seesAllOrders(portalUser)) {
+      } else if (!useBackendApi && !seesAllOrders(portalUser)) {
         visible = filterOrdersByCnpjs(all, portalUser.cnpjs);
       }
       setPedidos(visible);
@@ -220,7 +304,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } finally {
       setLoadingOrders(false);
     }
-  }, [portalUser, clientStatus, token, clientPreview]);
+  }, [portalUser, clientStatus, token, clientPreview, authProvider, user]);
 
   const refreshProfile = useCallback(async (): Promise<ClientStatus> => {
     if (!token) return clientStatus;
@@ -234,6 +318,33 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         return profile.status as ClientStatus;
       }
       if (!user) return clientStatus;
+      if (authProvider === 'firebase-email' && !isGoogleLinkedUser(user)) {
+        try {
+          const me = await fetchMeFromApi();
+          if (me.clientStatus !== 'none') {
+            setPortalUser(me.portalUser);
+            setClientStatus(me.clientStatus);
+            return me.clientStatus;
+          }
+        } catch {
+          /* fallback Firestore */
+        }
+        const reg = user.uid ? await fetchPortalRegistrationByUid(user.uid) : null;
+        if (reg) {
+          const cnpjNorm = normalizeCNPJ(reg.cnpj);
+        const cnpjs = reg.status === 'ATIVO' && cnpjNorm.length === 14 ? [cnpjNorm] : [];
+          setPortalUser(buildPortalUser(reg.email, reg.nome, cnpjs, reg.notifyEmail));
+          const status =
+            reg.status === 'ATIVO'
+              ? 'ativo'
+              : reg.status === 'REVOGADO'
+                ? 'revogado'
+                : 'pendente';
+          setClientStatus(status);
+          return status;
+        }
+        return clientStatus;
+      }
       if (USE_OAUTH_SHEETS) {
         const session = await resolvePortalSession(token, user.email ?? '', user.displayName ?? user.email ?? '');
         setPortalUser(session.portalUser);
@@ -266,14 +377,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     const setupFirebaseAuth = () => {
       const unsub = subscribeAuth(
-        async (currentUser, accessToken) => {
+        async (currentUser, accessToken, provider) => {
           if (cancelled) return;
           setUser(currentUser);
           setToken(accessToken);
-          setAuthProvider('google');
+          setAuthProvider(provider);
           setNeedsAuth(false);
+          setOrdersError(null);
           try {
-            await resolveUserContext(currentUser, accessToken);
+            await resolveUserContext(currentUser, accessToken, provider);
           } catch (err) {
             setAuthError(err instanceof Error ? err.message : 'Erro ao carregar perfil.');
           }
@@ -337,7 +449,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setToken(accessToken);
       setAuthProvider('google');
       setNeedsAuth(false);
-      await resolveUserContext(u, accessToken);
+      await resolveUserContext(u, accessToken, 'google');
     } catch (err) {
       setAuthError(formatAuthError(err));
     } finally {
@@ -348,19 +460,113 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const loginWithCredentials = async (email: string, password: string) => {
     setIsLoggingIn(true);
     setAuthError(null);
+    setOrdersError(null);
     try {
-      const result = await loginWithSheetAuth(email, password);
-      applySheetProfile(result.sessionToken, result.expiresAt, result.profile);
+      clearStoredSheetAuth();
+      const u = await loginWithEmailPassword(email, password);
+      const idToken = await u.getIdToken();
+      setUser(u);
+      setToken(idToken);
+      setAuthProvider('firebase-email');
+      setNeedsAuth(false);
+      await resolveUserContext(u, idToken, 'firebase-email');
     } catch (err) {
-      setAuthError(err instanceof Error ? err.message : 'Erro ao entrar.');
+      setAuthError(formatAuthError(err));
     } finally {
       setIsLoggingIn(false);
     }
   };
 
+  const registerPublicAccount = useCallback(async (payload: {
+    email: string;
+    password: string;
+    nomeContato: string;
+    sobrenomeContato: string;
+    cnpj: string;
+    notifyEmail: boolean;
+  }) => {
+    setIsLoggingIn(true);
+    setAuthError(null);
+    try {
+      clearStoredSheetAuth();
+      const nome = `${payload.nomeContato.trim()} ${payload.sobrenomeContato.trim()}`.trim();
+      const u = await registerWithEmailPassword(payload.email, payload.password, nome);
+      await savePortalRegistration({
+        uid: u.uid,
+        email: payload.email,
+        nome,
+        nomeContato: payload.nomeContato,
+        sobrenomeContato: payload.sobrenomeContato,
+        cnpj: payload.cnpj,
+        notifyEmail: payload.notifyEmail,
+      });
+      const idToken = await u.getIdToken();
+      setUser(u);
+      setToken(idToken);
+      setAuthProvider('firebase-email');
+      setNeedsAuth(false);
+      setPortalUser(buildPortalUser(u.email ?? payload.email, nome, [], payload.notifyEmail));
+      setClientStatus('pendente');
+      setMustChangePassword(false);
+    } catch (err) {
+      setAuthError(formatAuthError(err));
+      throw err;
+    } finally {
+      setIsLoggingIn(false);
+    }
+  }, []);
+
+  const refreshPendingAccessCount = useCallback(async () => {
+    if (!portalUser || !canManageClientAccess(portalUser) || USE_MOCK_DATA) {
+      setPendingAccessCount(0);
+      return;
+    }
+    if (!token || !isGoogleSheetsAccessToken(token)) {
+      setPendingAccessCount(0);
+      return;
+    }
+    try {
+      const [records, firestorePending] = await Promise.all([
+        token ? fetchClientAccessRecords(token) : Promise.resolve([]),
+        fetchPendingPortalRegistrations().catch(() => []),
+      ]);
+      const sheetPending = records.filter((r) => r.status === 'PENDENTE').length;
+      const firestoreOnly = firestorePending.filter(
+        (f) => !records.some((r) => r.email === f.email)
+      ).length;
+      setPendingAccessCount(sheetPending + firestoreOnly);
+    } catch {
+      setPendingAccessCount(0);
+    }
+  }, [portalUser, token]);
+
+  useEffect(() => {
+    void refreshPendingAccessCount();
+  }, [refreshPendingAccessCount]);
+
   const loginAsDemo = (role: MockLoginRole) => {
     applyMockSession(role);
   };
+
+  const connectSheets = useCallback(async () => {
+    if (!user || !isGoogleLinkedUser(user)) {
+      setAuthError('Entre com Google (@binsight.com.br) para conectar as planilhas.');
+      return;
+    }
+    setConnectingSheets(true);
+    setAuthError(null);
+    try {
+      const accessToken = await connectGoogleSheetsAccess();
+      setToken(accessToken);
+      await resolveUserContext(user, accessToken, 'google');
+      await refreshOrders();
+      await refreshPendingAccessCount();
+    } catch (err) {
+      setAuthError(formatAuthError(err));
+    } finally {
+      setConnectingSheets(false);
+    }
+  }, [user, resolveUserContext, refreshOrders, refreshPendingAccessCount]);
 
   const logout = async () => {
     if (USE_MOCK_DATA && SKIP_AUTH) {
@@ -457,6 +663,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       skipAuth: SKIP_AUTH,
       login,
       loginWithCredentials,
+      registerPublicAccount,
       loginAsDemo,
       logout,
       refreshOrders,
@@ -464,11 +671,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       clearMustChangePassword: () => setMustChangePassword(false),
       addMockPedido,
       clearAuthError: () => setAuthError(null),
+      clearOrdersError: () => setOrdersError(null),
       clientPreview,
       isViewingAsClient,
       canUseClientPreview: adminCanPreview,
       startClientPreview,
       stopClientPreview,
+      pendingAccessCount,
+      refreshPendingAccessCount,
+      needsSheetsAccess,
+      connectingSheets,
+      connectSheets,
     }),
     [
       user,
@@ -486,12 +699,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       lastSync,
       refreshOrders,
       refreshProfile,
+      registerPublicAccount,
       addMockPedido,
       clientPreview,
       isViewingAsClient,
       adminCanPreview,
       startClientPreview,
       stopClientPreview,
+      pendingAccessCount,
+      refreshPendingAccessCount,
+      needsSheetsAccess,
+      connectingSheets,
+      connectSheets,
     ]
   );
 

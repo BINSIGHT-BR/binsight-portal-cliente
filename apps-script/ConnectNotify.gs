@@ -30,6 +30,7 @@ function doPost(e) {
       case 'client_pedidos':
       case 'client_drive_file':
       case 'client_update_notify':
+      case 'public_register':
         return jsonOut(handleAuthPost_(body));
       default:
         return jsonOut({ ok: false, error: 'Unknown type' }, 400);
@@ -70,25 +71,45 @@ function sendClientePedido_(data) {
 
   var ref = data.pedidoRef || 'Pedido';
   var subject = data.subject || '[BInsight] Atualização do seu pedido';
-  var html =
-    '<p>Olá,</p>' +
-    '<p>' +
-    (data.message || '') +
-    '</p>' +
-    '<p><strong>Referência:</strong> ' +
-    esc_(ref) +
-    '<br><strong>Cliente:</strong> ' +
-    esc_(data.nomeCliente || '') +
-    '</p>' +
-    '<p><a href="' +
-    PORTAL_URL +
-    '/pedidos">Abrir Meus Pedidos no BInsight Connect</a></p>' +
-    '<p style="color:#666;font-size:12px;">Enviado por BInsight Financeiro. ' +
-    'Para parar de receber estes e-mails, acesse Meu perfil no portal.</p>';
+  var timelineBlock = data.timelineHtml
+    ? '<div style="margin:20px 0;">' + data.timelineHtml + '</div>'
+    : '';
+  var recipientNames = data.recipientNames || {};
 
   for (var i = 0; i < recipients.length; i++) {
+    var to = recipients[i];
+    var displayName = recipientNames[to] || (typeof to === 'object' ? to.displayName : '') || '';
+    if (typeof to === 'object' && to.email) {
+      displayName = to.displayName || displayName;
+      to = to.email;
+    }
+    var firstName = String(displayName || '')
+      .trim()
+      .split(/\s+/)[0];
+    var greeting = firstName ? 'Olá, ' + esc_(firstName) + ',' : 'Olá,';
+    var html =
+      '<div style="font-family:Arial,sans-serif;max-width:600px;color:#1e293b;">' +
+      '<p>' +
+      greeting +
+      '</p>' +
+      '<p>' +
+      (data.message || '') +
+      '</p>' +
+      timelineBlock +
+      '<p style="margin-top:20px;"><strong>Referência:</strong> ' +
+      esc_(ref) +
+      '<br><strong>Cliente:</strong> ' +
+      esc_(data.nomeCliente || '') +
+      '</p>' +
+      '<p><a href="' +
+      PORTAL_URL +
+      '/pedidos" style="display:inline-block;padding:10px 20px;background:#7c3aed;color:#ffffff;text-decoration:none;border-radius:6px;font-weight:bold;">Abrir Meus Pedidos</a></p>' +
+      '<p style="color:#666;font-size:12px;margin-top:24px;">Enviado por BInsight Financeiro. ' +
+      'Para parar de receber estes e-mails, acesse Meu perfil no portal.</p>' +
+      '</div>';
+
     MailApp.sendEmail({
-      to: recipients[i],
+      to: to,
       subject: subject,
       htmlBody: html,
       name: 'BInsight Financeiro',

@@ -1,4 +1,5 @@
 import { OrderAlert, PedidoMapa } from '../types';
+import { isComissaoPaga, isPagamentoVencido } from './clientOrderStatus';
 import { parseSheetDate } from './orders';
 
 const NF_PENDING_DAYS = 3;
@@ -23,14 +24,14 @@ export function computeOrderAlerts(pedidos: PedidoMapa[]): OrderAlert[] {
   for (const p of pedidos) {
     const pgto = p.statusPgto.toUpperCase();
 
-    if (pgto.includes('VENCID')) {
+    if (isPagamentoVencido(p)) {
       alerts.push({
         kind: 'pagamento_vencido',
         pedido: p,
         message: `${p.nomeCliente} — parcela vencida (${p.numPedidoCli || p.numNF || 'sem ref'})`,
         severity: 'critical',
       });
-    } else if (pgto.includes('A VENC') || pgto.includes('VENCER')) {
+    } else if (!isComissaoPaga(p.statusComissao) && (pgto.includes('A VENC') || pgto.includes('VENCER'))) {
       alerts.push({
         kind: 'pagamento_a_vencer',
         pedido: p,

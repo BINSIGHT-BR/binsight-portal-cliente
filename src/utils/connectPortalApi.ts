@@ -48,6 +48,36 @@ async function postConnect<T>(payload: Record<string, unknown>): Promise<T> {
   return data;
 }
 
+export async function registerPublicAccount(payload: {
+  email: string;
+  password: string;
+  nomeContato: string;
+  sobrenomeContato: string;
+  cnpj: string;
+  notifyEmail?: boolean;
+}): Promise<SheetLoginResult> {
+  const nome = `${payload.nomeContato.trim()} ${payload.sobrenomeContato.trim()}`.trim();
+  const data = await postConnect<{
+    sessionToken: string;
+    expiresAt: number;
+    profile: SheetAuthProfile;
+  }>({
+    type: 'public_register',
+    email: payload.email.trim(),
+    password: payload.password,
+    nome,
+    nomeContato: payload.nomeContato.trim(),
+    sobrenomeContato: payload.sobrenomeContato.trim(),
+    cnpj: payload.cnpj.replace(/\D/g, ''),
+    notifyEmail: payload.notifyEmail !== false,
+  });
+  return {
+    sessionToken: data.sessionToken,
+    expiresAt: data.expiresAt,
+    profile: data.profile,
+  };
+}
+
 export async function loginWithSheetAuth(email: string, password: string): Promise<SheetLoginResult> {
   const data = await postConnect<{
     sessionToken: string;

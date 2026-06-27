@@ -1,4 +1,4 @@
-import { FormEvent, useState } from 'react';
+import { FormEvent, useMemo, useState } from 'react';
 import { Bell, Loader2, Send } from 'lucide-react';
 import { requestClientAccess } from '../utils/clientAccess';
 import { formatCNPJ } from '../utils/orders';
@@ -12,6 +12,12 @@ interface Props {
   onRegistered?: () => void | Promise<void>;
 }
 
+function splitDisplayName(name: string): { first: string; last: string } {
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  if (parts.length <= 1) return { first: parts[0] ?? '', last: '' };
+  return { first: parts[0], last: parts.slice(1).join(' ') };
+}
+
 export default function ClientRegisterForm({
   accessToken,
   email,
@@ -19,7 +25,9 @@ export default function ClientRegisterForm({
   googleFirstAccess = false,
   onRegistered,
 }: Props) {
-  const [nome, setNome] = useState(displayName);
+  const initial = useMemo(() => splitDisplayName(displayName), [displayName]);
+  const [firstName, setFirstName] = useState(initial.first);
+  const [lastName, setLastName] = useState(initial.last);
   const [cnpj, setCnpj] = useState('');
   const [notifyEmail, setNotifyEmail] = useState(true);
   const [loading, setLoading] = useState(false);
@@ -31,7 +39,11 @@ export default function ClientRegisterForm({
     setLoading(true);
     setError(null);
     try {
-      await requestClientAccess(accessToken, email, nome, cnpj, notifyEmail);
+      const nome = `${firstName.trim()} ${lastName.trim()}`.trim();
+      await requestClientAccess(accessToken, email, nome, cnpj, notifyEmail, {
+        nomeContato: firstName.trim(),
+        sobrenomeContato: lastName.trim(),
+      });
       setSuccess(true);
       await onRegistered?.();
     } catch (err) {
@@ -69,8 +81,8 @@ export default function ClientRegisterForm({
         </h2>
         <p className="text-sm text-slate-500 mt-1 mb-6">
           {googleFirstAccess
-            ? 'Seu Google foi autenticado com sucesso. Informe o CNPJ da empresa para acompanhar pedidos — a equipe BInsight validará seu acesso.'
-            : 'Informe o CNPJ da empresa para acompanhar pedidos. Um responsável BInsight validará seu acesso. Use o mesmo e-mail que receberá permissão nos documentos (NF/boleto).'}
+            ? 'Seu Google foi autenticado com sucesso. Informe seu nome e o CNPJ da empresa — a equipe BInsight validará seu acesso.'
+            : 'Informe seus dados e o CNPJ da empresa para acompanhar pedidos. Use o mesmo e-mail que receberá permissão nos documentos (NF/boleto).'}
         </p>
 
         {error && (
@@ -87,15 +99,29 @@ export default function ClientRegisterForm({
               className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 bg-slate-50 text-slate-500"
             />
           </div>
-          <div>
-            <label className="block text-[10px] font-bold uppercase text-slate-400 mb-1">Seu nome</label>
-            <input
-              type="text"
-              value={nome}
-              onChange={(e) => setNome(e.target.value)}
-              required
-              className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 focus:ring-2 focus:ring-purple-500"
-            />
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <label className="block text-[10px] font-bold uppercase text-slate-400 mb-1">Nome</label>
+              <input
+                type="text"
+                value={firstName}
+                onChange={(e) => setFirstName(e.target.value)}
+                placeholder="João"
+                required
+                className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 focus:ring-2 focus:ring-purple-500"
+              />
+            </div>
+            <div>
+              <label className="block text-[10px] font-bold uppercase text-slate-400 mb-1">Sobrenome</label>
+              <input
+                type="text"
+                value={lastName}
+                onChange={(e) => setLastName(e.target.value)}
+                placeholder="Silva"
+                required
+                className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 focus:ring-2 focus:ring-purple-500"
+              />
+            </div>
           </div>
           <div>
             <label className="block text-[10px] font-bold uppercase text-slate-400 mb-1">CNPJ da empresa</label>
@@ -107,6 +133,7 @@ export default function ClientRegisterForm({
               required
               className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 focus:ring-2 focus:ring-purple-500 font-mono"
             />
+            <p className="text-[10px] text-slate-400 mt-1">Com ou sem pontuação — zeros à esquerda são preservados.</p>
           </div>
           <label className="flex items-start gap-3 cursor-pointer rounded-xl border border-slate-100 bg-slate-50/80 p-4">
             <input

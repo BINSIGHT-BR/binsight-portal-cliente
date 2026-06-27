@@ -1,12 +1,14 @@
 const WEBAPP_URL = (import.meta.env.VITE_NOTIFY_WEBAPP_URL as string | undefined)?.trim() ?? '';
 const NOTIFY_SECRET = (import.meta.env.VITE_NOTIFY_SECRET as string | undefined)?.trim() ?? '';
 
+const CLIENTE_PEDIDO_API = '/api/notify/cliente-pedido';
+
 export function isNotifyConfigured(): boolean {
-  return Boolean(WEBAPP_URL && NOTIFY_SECRET);
+  return Boolean(NOTIFY_SECRET);
 }
 
-async function postNotify(payload: Record<string, unknown>): Promise<void> {
-  if (!isNotifyConfigured()) {
+async function postNotifyWebApp(payload: Record<string, unknown>): Promise<void> {
+  if (!WEBAPP_URL || !NOTIFY_SECRET) {
     console.warn('[notify] VITE_NOTIFY_WEBAPP_URL / VITE_NOTIFY_SECRET não configurados.');
     return;
   }
@@ -19,10 +21,38 @@ async function postNotify(payload: Record<string, unknown>): Promise<void> {
     });
     if (!res.ok) {
       const text = await res.text().catch(() => '');
-      console.warn('[notify] Falha HTTP', res.status, text);
+      console.warn('[notify] Falha HTTP Web App', res.status, text.slice(0, 200));
     }
   } catch (err) {
     console.warn('[notify] Erro ao chamar Web App:', err);
+  }
+}
+
+async function postClientePedidoApi(payload: Record<string, unknown>): Promise<void> {
+  if (!NOTIFY_SECRET) {
+    throw new Error('Notificação por e-mail não configurada no portal (VITE_NOTIFY_SECRET).');
+  }
+
+  const res = await fetch(CLIENTE_PEDIDO_API, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ...payload, secret: NOTIFY_SECRET }),
+  });
+  const text = await res.text().catch(() => '');
+  if (!res.ok) {
+    throw new Error(`Falha ao enviar e-mail (${res.status}): ${text.slice(0, 200)}`);
+  }
+  try {
+    const data = JSON.parse(text) as { ok?: boolean; sent?: number; error?: string };
+    if (data.ok === false || data.error) {
+      throw new Error(data.error ?? 'Falha ao enviar e-mail ao cliente.');
+    }
+    if (typeof data.sent === 'number' && data.sent === 0) {
+      throw new Error('Nenhum e-mail foi enviado (verifique Gmail/SMTP nas Cloud Functions).');
+    }
+  } catch (parseErr) {
+    if (parseErr instanceof SyntaxError) return;
+    throw parseErr;
   }
 }
 
@@ -32,7 +62,7 @@ export async function notifyFinanceiroCadastro(payload: {
   cnpj: string;
   notifyEmail: boolean;
 }): Promise<void> {
-  await postNotify({
+  await postNotifyWebApp({
     type: 'financeiro_cadastro',
     email: payload.email,
     nome: payload.nome,
@@ -41,20 +71,31 @@ export async function notifyFinanceiroCadastro(payload: {
   });
 }
 
+export interface NotifyRecipientPayload {
+  email: string;
+  displayName?: string;
+}
+
 export async function notifyClientePedido(payload: {
-  recipients: string[];
+  recipients: NotifyRecipientPayload[] | string[];
   pedidoRef: string;
   nomeCliente: string;
   subject: string;
   message: string;
+  timelineHtml?: string;
 }): Promise<void> {
   if (!payload.recipients.length) return;
-  await postNotify({
-    type: 'cliente_pedido',
-    recipients: payload.recipients,
+  const recipients = payload.recipients.map((r) =>
+    typeof r === 'string'
+      ? { email: r, displayName: '' }
+      : { email: r.email, displayName: r.displayName ?? '' }
+  );
+  await postClientePedidoApi({
+    recipients,
     pedidoRef: payload.pedidoRef,
     nomeCliente: payload.nomeCliente,
     subject: payload.subject,
     message: payload.message,
+    ...(payload.timelineHtml ? { timelineHtml: payload.timelineHtml } : {}),
   });
 }

@@ -27,8 +27,35 @@ export function formatPctForSheet(n: number): string {
   return `${n.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}%`;
 }
 
+/** Interpreta % da planilha: 38,55 | 38,55% | 0,3855 (ratio) | 0,08 (ratio 8%). */
+export function parsePctNum(v: string | number): number | null {
+  if (v === null || v === undefined || v === '') return null;
+  const raw = String(v).trim();
+  if (!raw) return null;
+  const n = parseBRLnum(raw.replace(/%/g, ''));
+  if (!isFinite(n)) return null;
+  if (n > 0 && n < 1) return n * 100;
+  return n;
+}
+
+/** Exibe margem % — recalcula de bruto/total se col W vier 0 ou vazia. */
+export function formatPctDisplay(
+  v: string | number,
+  fallback?: { bruto?: string; totalCompra?: string; vendaTotal?: string }
+): string {
+  let n = parsePctNum(v);
+  if ((n === null || n === 0) && fallback) {
+    const bruto = parseBRLnum(fallback.bruto ?? '');
+    const base =
+      parseBRLnum(fallback.totalCompra ?? '') || parseBRLnum(fallback.vendaTotal ?? '');
+    if (base > 0 && bruto !== 0) n = (bruto / base) * 100;
+  }
+  if (n === null) return '—';
+  return `${n.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}%`;
+}
+
 export function formatBRLDisplay(v: string | number): string {
+  if (v === null || v === undefined || String(v).trim() === '') return '—';
   const n = parseBRLnum(v);
-  if (!n) return '—';
   return n.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 }

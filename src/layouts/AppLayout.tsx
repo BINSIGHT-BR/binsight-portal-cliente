@@ -1,25 +1,56 @@
 import { type ReactNode } from 'react';
 import { NavLink, Outlet } from 'react-router-dom';
-import { LayoutDashboard, LogOut, Package, Shield, UserCircle, Users } from 'lucide-react';
+import { ClipboardCheck, LayoutDashboard, LogOut, Package, Shield, UserCircle, Users } from 'lucide-react';
+import DailyReviewPopup from '../components/DailyReviewPopup';
+import { useDailyReviewState } from '../hooks/useDailyReviewState';
+import { canEditOrders, canManageClientAccess, roleLabel } from '../utils/roles';
 import BinsightBrand from '../components/BinsightBrand';
 import AdminClientPreviewBar from '../components/AdminClientPreviewBar';
 import MustChangePasswordModal from '../components/MustChangePasswordModal';
 import DevRoleSwitcher from '../components/DevRoleSwitcher';
+import SheetsConnectBanner from '../components/SheetsConnectBanner';
 import { useAuth } from '../contexts/AuthContext';
-import { canManageClientAccess, roleLabel } from '../utils/roles';
 import { USE_MOCK_DATA } from '../constants/columns';
+import { formatNavBadgeCount } from '../utils/navBadge';
 
 export default function AppLayout() {
-  const { portalUser, logout, skipAuth, isViewingAsClient, canUseClientPreview } = useAuth();
+  const {
+    portalUser,
+    logout,
+    skipAuth,
+    isViewingAsClient,
+    canUseClientPreview,
+    pendingAccessCount,
+    clientStatus,
+    pedidos,
+    needsSheetsAccess,
+    connectingSheets,
+    connectSheets,
+  } = useAuth();
+
+  const showDailyReview = Boolean(
+    portalUser && canEditOrders(portalUser) && !isViewingAsClient
+  );
+  const dailyReview = useDailyReviewState(showDailyReview ? pedidos : []);
+
   if (!portalUser) return null;
 
   const isStaff = portalUser.role !== 'cliente' && !isViewingAsClient;
+  const showClientProfile = !isStaff && clientStatus === 'ativo';
   const showAccessNav = canManageClientAccess(portalUser) && !isViewingAsClient;
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 flex flex-col">
       <MustChangePasswordModal />
-      {canUseClientPreview && <AdminClientPreviewBar />}
+      {showDailyReview && (
+        <DailyReviewPopup
+          remainingCount={dailyReview.remainingCount}
+          totalCount={dailyReview.totalCount}
+          reviewedCount={dailyReview.reviewedCount}
+          reviewDate={dailyReview.reviewDate}
+        />
+      )}
+      {canUseClientPreview && isViewingAsClient && <AdminClientPreviewBar />}
       <header className="bg-white border-b border-slate-100/80 sticky top-0 z-40 shadow-sm shrink-0">
         <div className="max-w-6xl mx-auto px-4 sm:px-6">
           <div className="flex justify-between items-center h-16 gap-4">
@@ -39,6 +70,13 @@ export default function AppLayout() {
               <span className="hidden md:block text-slate-500 truncate max-w-[160px]">
                 {portalUser.displayName}
               </span>
+              {needsSheetsAccess && (
+                <SheetsConnectBanner
+                  compact
+                  connecting={connectingSheets}
+                  onConnect={() => void connectSheets()}
+                />
+              )}
               <button
                 onClick={() => void logout()}
                 className="flex items-center gap-1.5 bg-red-50 hover:bg-red-100 text-red-600 font-semibold text-[10px] uppercase tracking-wide py-1.5 px-3 rounded-lg transition"
@@ -54,19 +92,32 @@ export default function AppLayout() {
           <div className="max-w-6xl mx-auto px-4 sm:px-6 flex gap-1 overflow-x-auto">
             <NavItem to="/" end icon={<LayoutDashboard className="w-4 h-4" />} label="Início" />
             {isStaff ? (
-              <NavItem
-                to="/admin/pedidos"
-                icon={<Package className="w-4 h-4" />}
-                label="Mapa Pedidos"
-              />
+              <>
+                <NavItem
+                  to="/admin/pedidos"
+                  icon={<Package className="w-4 h-4" />}
+                  label="Mapa Pedidos"
+                />
+                {showDailyReview && (
+                  <NavItem
+                    to="/admin/revisao"
+                    icon={<ClipboardCheck className="w-4 h-4" />}
+                    label="Revisão diária"
+                    badge={dailyReview.remainingCount > 0 ? dailyReview.remainingCount : undefined}
+                    badgeMax={999}
+                  />
+                )}
+              </>
             ) : (
               <>
                 <NavItem to="/pedidos" icon={<Package className="w-4 h-4" />} label="Meus Pedidos" />
-                <NavItem
-                  to="/perfil"
-                  icon={<UserCircle className="w-4 h-4" />}
-                  label="Meu perfil"
-                />
+                {showClientProfile && (
+                  <NavItem
+                    to="/perfil"
+                    icon={<UserCircle className="w-4 h-4" />}
+                    label="Meu perfil"
+                  />
+                )}
               </>
             )}
             {showAccessNav && (
@@ -74,6 +125,8 @@ export default function AppLayout() {
                 to="/admin/acessos"
                 icon={<Users className="w-4 h-4" />}
                 label="Acessos Clientes"
+                badge={pendingAccessCount > 0 ? pendingAccessCount : undefined}
+                badgeMax={9}
               />
             )}
           </div>
@@ -81,6 +134,14 @@ export default function AppLayout() {
       </header>
 
       <main className="flex-1 max-w-6xl mx-auto w-full px-4 sm:px-6 py-6 lg:py-8">
+        {needsSheetsAccess && (
+          <div className="mb-6">
+            <SheetsConnectBanner
+              connecting={connectingSheets}
+              onConnect={() => void connectSheets()}
+            />
+          </div>
+        )}
         <Outlet />
       </main>
 
@@ -96,25 +157,40 @@ function NavItem({
   end,
   icon,
   label,
+  badge,
+  badgeMax,
 }: {
   to: string;
   end?: boolean;
   icon: ReactNode;
   label: string;
+  badge?: number;
+  /** Se definido, exibe "N+" acima deste valor. Omitir para mostrar o número real (até 999). */
+  badgeMax?: number;
 }) {
   return (
     <NavLink
       to={to}
       end={end}
       className={({ isActive }) =>
-        `flex items-center gap-2 px-4 py-3 text-xs font-bold uppercase tracking-wide border-b-2 transition whitespace-nowrap ${
+        `relative flex items-center gap-2 px-4 py-3 text-xs font-bold uppercase tracking-wide border-b-2 transition whitespace-nowrap ${
           isActive
             ? 'border-purple-600 text-purple-700'
             : 'border-transparent text-slate-400 hover:text-slate-600'
         }`
       }
     >
-      {icon}
+      <span className="relative inline-flex">
+        {icon}
+        {badge != null && badge > 0 && (
+          <span
+            className="absolute -top-1.5 -right-2 min-w-[16px] h-4 px-1 rounded-full bg-amber-500 text-white text-[9px] font-bold flex items-center justify-center ring-2 ring-white tabular-nums"
+            title={`${badge} pendente(s)`}
+          >
+            {formatNavBadgeCount(badge, badgeMax)}
+          </span>
+        )}
+      </span>
       {label}
     </NavLink>
   );

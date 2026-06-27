@@ -1,10 +1,10 @@
 import { useRef, useState } from 'react';
-import { FileText, Loader2, Upload } from 'lucide-react';
+import { FileText, Loader2, Trash2, Upload } from 'lucide-react';
 import { PedidoMapa } from '../types';
 import { USE_MOCK_DATA, USE_OAUTH_SHEETS } from '../constants/columns';
-import { uploadAndLinkOrderDocument } from '../utils/orderDocuments';
+import { removeAndUnlinkOrderDocument, uploadAndLinkOrderDocument } from '../utils/orderDocuments';
 import { resolveClientDocEmails } from '../utils/clientDocAccess';
-import { uploadNfViaApi } from '../utils/clienteApi';
+import { deleteNfViaApi, updatePedidoViaApi, uploadNfViaApi } from '../utils/clienteApi';
 
 interface Props {
   pedido: PedidoMapa;
@@ -16,11 +16,16 @@ interface Props {
 export default function OrderDocumentUpload({ pedido, accessToken, userEmail, onUpdated }: Props) {
   const nfRef = useRef<HTMLInputElement>(null);
   const boletoRef = useRef<HTMLInputElement>(null);
-  const [uploading, setUploading] = useState<'nf' | 'boleto' | null>(null);
+  const [busy, setBusy] = useState<'nf' | 'boleto' | null>(null);
+  const [busyAction, setBusyAction] = useState<'upload' | 'remove' | null>(null);
   const [sharePreview, setSharePreview] = useState<string[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [successMsg, setSuccessMsg] = useState<string | null>(null);
 
   const canUpload = !USE_MOCK_DATA && (USE_OAUTH_SHEETS || !USE_OAUTH_SHEETS);
+
+  const hasNf = Boolean(pedido.nfDriveUrl?.trim()) || Boolean(pedido.hasNfFile);
+  const hasBoleto = Boolean(pedido.boletoDriveUrl?.trim());
 
   const loadSharePreview = async () => {
     if (USE_MOCK_DATA || !USE_OAUTH_SHEETS) return;
@@ -35,11 +40,13 @@ export default function OrderDocumentUpload({ pedido, accessToken, userEmail, on
   const handleUpload = async (kind: 'nf' | 'boleto', files: FileList | null) => {
     if (!files?.length) return;
     const file = files[0];
-    setUploading(kind);
+    setBusy(kind);
+    setBusyAction('upload');
     setError(null);
+    setSuccessMsg(null);
     try {
       if (USE_OAUTH_SHEETS) {
-        const updated = await uploadAndLinkOrderDocument(
+        const { pedido: updated, notify } = await uploadAndLinkOrderDocument(
           accessToken,
           kind,
           file,
@@ -47,6 +54,11 @@ export default function OrderDocumentUpload({ pedido, accessToken, userEmail, on
           userEmail
         );
         onUpdated(updated);
+        if (notify.emailed.length) {
+          setSuccessMsg(`E-mail enviado para: ${notify.emailed.join(', ')}`);
+        } else if (notify.skippedReason) {
+          setError(`Documento salvo, mas e-mail não enviado: ${notify.skippedReason}`);
+        }
         void loadSharePreview();
       } else {
         if (kind !== 'nf') throw new Error('Boleto via API ainda não disponível.');
@@ -56,7 +68,52 @@ export default function OrderDocumentUpload({ pedido, accessToken, userEmail, on
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Erro no upload.');
     } finally {
-      setUploading(null);
+      setBusy(null);
+      setBusyAction(null);
+    }
+  };
+
+  const handleRemove = async (kind: 'nf' | 'boleto') => {
+    const label = kind === 'nf' ? 'Nota Fiscal' : 'Boleto';
+    const hasDoc = kind === 'nf' ? hasNf : hasBoleto;
+    if (!hasDoc) return;
+
+    const ok = window.confirm(
+      `Remover a ${label} deste pedido?\n\nO cliente deixará de visualizar o documento no portal. O arquivo no Drive será movido para a lixeira quando possível.`
+    );
+    if (!ok) return;
+
+    setBusy(kind);
+    setBusyAction('remove');
+    setError(null);
+    try {
+      if (USE_OAUTH_SHEETS) {
+        const updated = await removeAndUnlinkOrderDocument(
+          accessToken,
+          kind,
+          pedido,
+          userEmail
+        );
+        onUpdated(updated);
+      } else {
+        if (kind === 'nf') {
+          if (pedido.hasNfFile) await deleteNfViaApi(pedido.rowNum);
+          if (pedido.nfDriveUrl?.trim()) {
+            await updatePedidoViaApi(pedido.rowNum, { nfDriveUrl: '' });
+          }
+          onUpdated({ ...pedido, nfDriveUrl: '', hasNfFile: false });
+        } else {
+          if (pedido.boletoDriveUrl?.trim()) {
+            await updatePedidoViaApi(pedido.rowNum, { boletoDriveUrl: '' });
+          }
+          onUpdated({ ...pedido, boletoDriveUrl: '' });
+        }
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Erro ao remover documento.');
+    } finally {
+      setBusy(null);
+      setBusyAction(null);
     }
   };
 
@@ -97,19 +154,24 @@ export default function OrderDocumentUpload({ pedido, accessToken, userEmail, on
       )}
 
       {error && <p className="text-[10px] text-red-600">{error}</p>}
+      {successMsg && <p className="text-[10px] text-green-700 font-medium">{successMsg}</p>}
 
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <DocSlot
           label="Nota Fiscal (col AC)"
-          link={pedido.nfDriveUrl}
-          uploading={uploading === 'nf'}
+          available={hasNf}
+          busy={busy === 'nf'}
+          busyAction={busy === 'nf' ? busyAction : null}
           onPick={() => nfRef.current?.click()}
+          onRemove={() => void handleRemove('nf')}
         />
         <DocSlot
           label="Boleto (col AD)"
-          link={pedido.boletoDriveUrl}
-          uploading={uploading === 'boleto'}
+          available={hasBoleto}
+          busy={busy === 'boleto'}
+          busyAction={busy === 'boleto' ? busyAction : null}
           onPick={() => boletoRef.current?.click()}
+          onRemove={() => void handleRemove('boleto')}
         />
       </div>
 
@@ -141,19 +203,23 @@ export default function OrderDocumentUpload({ pedido, accessToken, userEmail, on
 
 function DocSlot({
   label,
-  link,
-  uploading,
+  available,
+  busy,
+  busyAction,
   onPick,
+  onRemove,
 }: {
   label: string;
-  link?: string;
-  uploading: boolean;
+  available: boolean;
+  busy: boolean;
+  busyAction: 'upload' | 'remove' | null;
   onPick: () => void;
+  onRemove: () => void;
 }) {
   return (
     <div className="bg-white border border-slate-200 rounded-lg p-3 space-y-2">
       <p className="text-[10px] font-bold uppercase text-slate-500">{label}</p>
-      {link ? (
+      {available ? (
         <p className="text-[10px] text-green-700 font-semibold flex items-center gap-1">
           <FileText className="w-3.5 h-3.5" /> Disponível ao cliente
         </p>
@@ -162,15 +228,36 @@ function DocSlot({
           <FileText className="w-3.5 h-3.5" /> Pendente
         </p>
       )}
-      <button
-        type="button"
-        disabled={uploading}
-        onClick={onPick}
-        className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-[10px] font-bold uppercase text-purple-700 bg-purple-50 hover:bg-purple-100 rounded-lg disabled:opacity-50"
-      >
-        {uploading ? <Loader2 className="w-3 h-3 animate-spin" /> : <Upload className="w-3 h-3" />}
-        {link ? 'Substituir' : 'Enviar'}
-      </button>
+      <div className="flex flex-wrap gap-2">
+        <button
+          type="button"
+          disabled={busy}
+          onClick={onPick}
+          className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-[10px] font-bold uppercase text-purple-700 bg-purple-50 hover:bg-purple-100 rounded-lg disabled:opacity-50"
+        >
+          {busy && busyAction === 'upload' ? (
+            <Loader2 className="w-3 h-3 animate-spin" />
+          ) : (
+            <Upload className="w-3 h-3" />
+          )}
+          {available ? 'Substituir' : 'Enviar'}
+        </button>
+        {available && (
+          <button
+            type="button"
+            disabled={busy}
+            onClick={onRemove}
+            className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-[10px] font-bold uppercase text-red-700 bg-red-50 hover:bg-red-100 rounded-lg disabled:opacity-50"
+          >
+            {busy && busyAction === 'remove' ? (
+              <Loader2 className="w-3 h-3 animate-spin" />
+            ) : (
+              <Trash2 className="w-3 h-3" />
+            )}
+            Remover
+          </button>
+        )}
+      </div>
     </div>
   );
 }

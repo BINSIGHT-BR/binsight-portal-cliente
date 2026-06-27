@@ -3,6 +3,8 @@ import { PedidoMapa, PortalUser } from '../types';
 import {
   CONSOLIDADO_COLUMNS,
   defaultOrderDateBR,
+  MAPA_DERIVED_KEYS,
+  MAPA_MONEY_KEYS,
   PERIODICIDADE_OPTIONS,
   STATUS_CONTRATO_OPTIONS,
   TIPO_RECORRENCIA_OPTIONS,
@@ -12,7 +14,9 @@ import { OBS_CLIENTE_STATUSES } from '../constants/obsCliente';
 import { X, Save, Loader2 } from 'lucide-react';
 import OrderDocumentUpload from './OrderDocumentUpload';
 import ParcelVencimentoFields from './ParcelVencimentoFields';
-import { deriveStatusPgtoFromDates } from '../utils/ordersCore';
+import { deriveStatusPgtoFromParcels } from '../utils/parcelPayment';
+import { computeOrderDerivedFields } from '../utils/orderCalculations';
+import { formatBRLDisplay, formatBRLForSheet, formatPctDisplay, parseBRLnum } from '../utils/brl';
 
 interface Props {
   pedido: PedidoMapa;
@@ -38,6 +42,9 @@ function inputDateToBr(iso: string): string {
 const inputCls =
   'w-full text-sm border border-slate-200 rounded-lg px-3 py-2 focus:ring-2 focus:ring-purple-500 focus:border-transparent';
 
+const derivedKeySet = new Set<string>(MAPA_DERIVED_KEYS);
+const moneyKeySet = new Set<string>(MAPA_MONEY_KEYS);
+
 export default function OrderEditModal({
   pedido,
   user,
@@ -50,6 +57,16 @@ export default function OrderEditModal({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const isAssinatura = form.mapaKind === 'assinatura';
+
+  const derived = useMemo(
+    () => computeOrderDerivedFields(form),
+    [form.qtd, form.custoDist, form.vendBins]
+  );
+
+  const displayForm = useMemo(
+    () => ({ ...form, ...derived }),
+    [form, derived]
+  );
 
   const editableFields = useMemo(() => {
     const skipKeys = new Set<keyof PedidoMapa>([
@@ -90,12 +107,24 @@ export default function OrderEditModal({
           statusPgto: venc ? 'A VENCER' : 'SEM DATA',
         };
       } else {
-        const paid = (form.statusPgto ?? '').trim().toUpperCase().includes('PAGA');
+        const withDerived = { ...form, ...derived };
         payload = {
-          ...form,
-          statusPgto: paid
-            ? 'PAGA'
-            : deriveStatusPgtoFromDates([form.parc1, form.parc2, form.parc3, form.parc4]),
+          ...withDerived,
+          custoDist: withDerived.custoDist
+            ? formatBRLForSheet(parseBRLnum(withDerived.custoDist))
+            : '',
+          vendBins: withDerived.vendBins
+            ? formatBRLForSheet(parseBRLnum(withDerived.vendBins))
+            : '',
+          liquido: withDerived.liquido
+            ? formatBRLForSheet(parseBRLnum(withDerived.liquido))
+            : '',
+          statusPgto: deriveStatusPgtoFromParcels(
+            form.parc1,
+            form.parc2,
+            form.parc3,
+            form.parc4
+          ),
         };
       }
       await onSave(payload);
@@ -210,20 +239,59 @@ export default function OrderEditModal({
               </Field>
             </div>
           ) : (
-            <ParcelVencimentoFields
-              parc1={form.parc1}
-              parc2={form.parc2}
-              parc3={form.parc3}
-              parc4={form.parc4}
-              statusPgto={form.statusPgto}
-              onChange={(next) => setForm((f) => ({ ...f, ...next }))}
-            />
+            <>
+              <ParcelVencimentoFields
+                parc1={form.parc1}
+                parc2={form.parc2}
+                parc3={form.parc3}
+                parc4={form.parc4}
+                statusPgto={form.statusPgto}
+                onChange={(next) => setForm((f) => ({ ...f, ...next }))}
+              />
+
+              {!isAssinatura && (user.role === 'admin' || user.role === 'financeiro') && (
+                <div className="rounded-xl border border-slate-200 bg-slate-50/80 p-3 space-y-2">
+                  <p className="text-[10px] font-bold uppercase text-slate-400 tracking-wide">
+                    Valores calculados (T, V, W, X)
+                  </p>
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                    <CalcField label="Total compra (T)" value={formatBRLDisplay(displayForm.totalCompra)} />
+                    <CalcField label="Venda total (V)" value={formatBRLDisplay(displayForm.vendaTotal)} />
+                    <CalcField
+                      label="Venda % (W)"
+                      value={formatPctDisplay(displayForm.vendaPct, {
+                        bruto: displayForm.bruto,
+                        totalCompra: displayForm.totalCompra,
+                        vendaTotal: displayForm.vendaTotal,
+                      })}
+                    />
+                    <CalcField label="Bruto (X)" value={formatBRLDisplay(displayForm.bruto)} />
+                  </div>
+                  <p className="text-[10px] text-slate-400">
+                    Margem % e totais recalculam ao alterar Qtd, R$ Custo Dist. ou R$ Vend. BInsight.
+                  </p>
+                </div>
+              )}
+            </>
           )}
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             {editableFields.map((col) => {
+              if (!isAssinatura && derivedKeySet.has(col.key)) return null;
+
               const value = String(form[col.key] ?? '');
               const id = col.key;
+
+              if (!isAssinatura && moneyKeySet.has(col.key) && col.key !== 'totalCompra' && col.key !== 'bruto' && col.key !== 'vendaTotal') {
+                return (
+                  <MoneyField
+                    key={id}
+                    label={col.label}
+                    value={value}
+                    onChange={(v) => handleChange(col.key, v)}
+                  />
+                );
+              }
 
               if (col.type === 'date') {
                 return (
@@ -351,6 +419,65 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
     <div>
       <label className="block text-[10px] font-bold uppercase text-slate-400 mb-1">{label}</label>
       {children}
+    </div>
+  );
+}
+
+function CalcField({ label, value }: { label: string; value: string }) {
+  return (
+    <div>
+      <p className="text-[9px] font-bold uppercase text-slate-400 mb-0.5">{label}</p>
+      <p className="text-sm font-semibold text-slate-800 tabular-nums">{value}</p>
+    </div>
+  );
+}
+
+function MoneyField({
+  label,
+  value,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  onChange: (sheetValue: string) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(value);
+
+  const commit = () => {
+    setEditing(false);
+    const n = parseBRLnum(draft);
+    onChange(n > 0 || draft.trim() ? formatBRLForSheet(n) : '');
+  };
+
+  return (
+    <div>
+      <label className="block text-[10px] font-bold uppercase text-slate-400 mb-1">{label}</label>
+      {editing ? (
+        <input
+          type="text"
+          autoFocus
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onBlur={commit}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') commit();
+          }}
+          className={inputCls}
+          placeholder="R$ 0,00"
+        />
+      ) : (
+        <button
+          type="button"
+          onClick={() => {
+            setDraft(value);
+            setEditing(true);
+          }}
+          className={`${inputCls} text-left tabular-nums hover:border-purple-300`}
+        >
+          {formatBRLDisplay(value)}
+        </button>
+      )}
     </div>
   );
 }

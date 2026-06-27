@@ -1,6 +1,5 @@
 import {
   getAllMapaIdsForClientRead,
-  getMapaSpreadsheetId,
   USE_MOCK_DATA,
   USE_OAUTH_SHEETS,
   yearFromDateBR,
@@ -38,6 +37,7 @@ export {
   normalizeStatusPgto,
   pedidoToMapaRow,
   filterOrdersByCnpjs,
+  isValidMapaCnpj,
   parseSheetDate,
   fmtBRL,
   isoDateToBR,
@@ -47,10 +47,15 @@ export {
 export async function fetchAllOrders(
   accessToken: string,
   filters?: PedidosFilters,
-  portalUser?: PortalUser | null
+  portalUser?: PortalUser | null,
+  useBackendApi = false
 ): Promise<PedidoMapa[]> {
   if (USE_MOCK_DATA) {
     return MOCK_PEDIDOS;
+  }
+
+  if (useBackendApi) {
+    return fetchPedidosFromApi(filters);
   }
 
   if (isSheetSessionToken(accessToken)) {
@@ -78,7 +83,9 @@ export async function fetchClientMapaOrders(
   accessToken: string,
   cnpjs: string[]
 ): Promise<PedidoMapa[]> {
-  const allowed = new Set(cnpjs.map(normalizeCNPJ).filter((c) => c.length >= 11));
+  const allowed = new Set(
+    cnpjs.map(normalizeCNPJ).filter((c) => c.length === 14)
+  );
   if (allowed.size === 0) return [];
 
   const { withTokenRetry } = await import('./googleSheets');
@@ -92,7 +99,8 @@ export async function fetchClientMapaOrders(
         fetchAssinaturaOrdersFromSpreadsheet(token, spreadsheetId),
       ]);
       for (const p of [...pedidosBatch, ...assinaturasBatch]) {
-        if (allowed.has(normalizeCNPJ(p.cnpj))) all.push(p);
+        const c = normalizeCNPJ(p.cnpj);
+        if (c.length === 14 && allowed.has(c)) all.push(p);
       }
     }
   });
@@ -111,14 +119,29 @@ export async function fetchClientMapaOrders(
 
 async function fetchStaffMapaOrders(accessToken: string): Promise<PedidoMapa[]> {
   const { withTokenRetry } = await import('./googleSheets');
-  const spreadsheetId = getMapaSpreadsheetId();
-  return withTokenRetry(accessToken, async (token) => {
-    const [pedidos, assinaturas] = await Promise.all([
-      fetchMapaOrdersFromSpreadsheet(token, spreadsheetId),
-      fetchAssinaturaOrdersFromSpreadsheet(token, spreadsheetId),
-    ]);
-    return [...pedidos, ...assinaturas];
+  const spreadsheetIds = getAllMapaIdsForClientRead();
+  const all: PedidoMapa[] = [];
+
+  await withTokenRetry(accessToken, async (token) => {
+    for (const spreadsheetId of spreadsheetIds) {
+      const [pedidosBatch, assinaturasBatch] = await Promise.all([
+        fetchMapaOrdersFromSpreadsheet(token, spreadsheetId),
+        fetchAssinaturaOrdersFromSpreadsheet(token, spreadsheetId),
+      ]);
+      all.push(...pedidosBatch, ...assinaturasBatch);
+    }
   });
+
+  all.sort((a, b) => {
+    const ya = a.mapaYear ?? yearFromDateBR(a.data) ?? 0;
+    const yb = b.mapaYear ?? yearFromDateBR(b.data) ?? 0;
+    if (yb !== ya) return yb - ya;
+    const da = parseSheetDate(a.data)?.getTime() ?? 0;
+    const db = parseSheetDate(b.data)?.getTime() ?? 0;
+    return db - da;
+  });
+
+  return all;
 }
 
 export async function createOrderRow(

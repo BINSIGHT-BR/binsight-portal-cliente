@@ -1,8 +1,8 @@
 import { PedidoMapa } from '../types';
 import { USE_MOCK_DATA, USE_OAUTH_SHEETS } from '../constants/columns';
-import { fetchNotifyRecipientsForCnpj } from './registrySheet';
+import { fetchNotifyRecipientProfilesForCnpj } from './registrySheet';
 import { notifyClientePedido } from './notifyService';
-import type { ClientDocKind } from './clientDrive';
+import { buildTimelineEmailHtml } from './timelineEmail';
 
 function escHtml(s: string): string {
   return String(s)
@@ -16,6 +16,99 @@ function pedidoRef(p: PedidoMapa): string {
   return p.numPedidoCli.trim() || p.numNF.trim() || `Linha ${p.rowNum}`;
 }
 
+function urlAdded(before: string | undefined, after: string | undefined): boolean {
+  const b = String(before ?? '').trim();
+  const a = String(after ?? '').trim();
+  return Boolean(a) && a !== b;
+}
+
+function buildDocumentsMessage(nfAdded: boolean, boletoAdded: boolean): string {
+  if (nfAdded && boletoAdded) {
+    return (
+      'A <strong>Nota Fiscal</strong> e o <strong>Boleto</strong> do seu pedido já estão disponíveis no portal BInsight Connect. ' +
+      'Acesse <strong>Meus Pedidos</strong> e clique em Ver NF ou Ver boleto.'
+    );
+  }
+  if (nfAdded) {
+    return (
+      'A <strong>Nota Fiscal</strong> do seu pedido já está disponível no portal BInsight Connect. ' +
+      'Acesse <strong>Meus Pedidos</strong> e clique em Ver NF.'
+    );
+  }
+  return (
+    'O <strong>Boleto</strong> do seu pedido já está disponível no portal BInsight Connect. ' +
+    'Acesse <strong>Meus Pedidos</strong> e clique em Ver boleto.'
+  );
+}
+
+function buildDocumentsSubject(ref: string, nfAdded: boolean, boletoAdded: boolean): string {
+  if (nfAdded && boletoAdded) return `[BInsight] NF e Boleto disponíveis — ${ref}`;
+  if (nfAdded) return `[BInsight] Nota Fiscal disponível — ${ref}`;
+  return `[BInsight] Boleto disponível — ${ref}`;
+}
+
+export async function maybeNotifyDocumentsAdded(
+  accessToken: string,
+  before: PedidoMapa,
+  after: PedidoMapa
+): Promise<void> {
+  if (USE_MOCK_DATA || !USE_OAUTH_SHEETS) return;
+
+  const nfAdded = urlAdded(before.nfDriveUrl, after.nfDriveUrl);
+  const boletoAdded = urlAdded(before.boletoDriveUrl, after.boletoDriveUrl);
+  if (!nfAdded && !boletoAdded) return;
+
+  const recipients = await fetchNotifyRecipientProfilesForCnpj(accessToken, after.cnpj);
+  if (!recipients.length) {
+    console.warn('[notify] Sem destinatários NOTIFY=Sim para CNPJ', after.cnpj);
+    return;
+  }
+
+  const ref = pedidoRef(after);
+  await notifyClientePedido({
+    recipients,
+    pedidoRef: ref,
+    nomeCliente: after.nomeCliente,
+    subject: buildDocumentsSubject(ref, nfAdded, boletoAdded),
+    message: buildDocumentsMessage(nfAdded, boletoAdded),
+  });
+}
+
+/** Notifica cliente após upload/remoção de NF/boleto (retorna destinatários ou motivo). */
+export async function notifyDocumentsAfterChange(
+  accessToken: string,
+  before: PedidoMapa,
+  after: PedidoMapa
+): Promise<{ emailed: string[]; skippedReason?: string }> {
+  if (USE_MOCK_DATA || !USE_OAUTH_SHEETS) {
+    return { emailed: [], skippedReason: 'Modo mock ou sem OAuth.' };
+  }
+
+  const nfAdded = urlAdded(before.nfDriveUrl, after.nfDriveUrl);
+  const boletoAdded = urlAdded(before.boletoDriveUrl, after.boletoDriveUrl);
+  if (!nfAdded && !boletoAdded) {
+    return { emailed: [], skippedReason: 'Documento já estava vinculado (sem alteração de link).' };
+  }
+
+  const recipients = await fetchNotifyRecipientProfilesForCnpj(accessToken, after.cnpj);
+  if (!recipients.length) {
+    return {
+      emailed: [],
+      skippedReason: 'Nenhum e-mail ATIVO com NOTIFY=Sim para o CNPJ deste pedido.',
+    };
+  }
+
+  const ref = pedidoRef(after);
+  await notifyClientePedido({
+    recipients,
+    pedidoRef: ref,
+    nomeCliente: after.nomeCliente,
+    subject: buildDocumentsSubject(ref, nfAdded, boletoAdded),
+    message: buildDocumentsMessage(nfAdded, boletoAdded),
+  });
+  return { emailed: recipients.map((r) => r.email) };
+}
+
 export async function maybeNotifyPedidoChanges(
   accessToken: string,
   before: PedidoMapa,
@@ -23,13 +116,15 @@ export async function maybeNotifyPedidoChanges(
 ): Promise<void> {
   if (USE_MOCK_DATA || !USE_OAUTH_SHEETS) return;
 
+  await maybeNotifyDocumentsAdded(accessToken, before, after);
+
   const statusChanged = (before.status ?? '').trim() !== (after.status ?? '').trim();
   const obsChanged = (before.obsCliente ?? '').trim() !== (after.obsCliente ?? '').trim();
   const pgtoChanged = (before.statusPgto ?? '').trim() !== (after.statusPgto ?? '').trim();
 
   if (!statusChanged && !obsChanged && !pgtoChanged) return;
 
-  const recipients = await fetchNotifyRecipientsForCnpj(accessToken, after.cnpj);
+  const recipients = await fetchNotifyRecipientProfilesForCnpj(accessToken, after.cnpj);
   if (!recipients.length) return;
 
   const parts: string[] = [];
@@ -38,31 +133,13 @@ export async function maybeNotifyPedidoChanges(
     parts.push(`Atualização BInsight: <strong>${escHtml(after.obsCliente)}</strong>`);
   if (pgtoChanged) parts.push(`Pagamento: <strong>${escHtml(after.statusPgto || '—')}</strong>`);
 
+  const ref = pedidoRef(after);
   await notifyClientePedido({
     recipients,
-    pedidoRef: pedidoRef(after),
+    pedidoRef: ref,
     nomeCliente: after.nomeCliente,
-    subject: `[BInsight] Atualização — ${pedidoRef(after)}`,
+    subject: `[BInsight] Atualização — ${ref}`,
     message: parts.join('<br>') || 'Há uma nova atualização no seu pedido.',
-  });
-}
-
-export async function maybeNotifyDocumentUploaded(
-  accessToken: string,
-  kind: ClientDocKind,
-  pedido: PedidoMapa
-): Promise<void> {
-  if (USE_MOCK_DATA || !USE_OAUTH_SHEETS) return;
-
-  const recipients = await fetchNotifyRecipientsForCnpj(accessToken, pedido.cnpj);
-  if (!recipients.length) return;
-
-  const label = kind === 'nf' ? 'Nota Fiscal' : 'Boleto';
-  await notifyClientePedido({
-    recipients,
-    pedidoRef: pedidoRef(pedido),
-    nomeCliente: pedido.nomeCliente,
-    subject: `[BInsight] ${label} disponível — ${pedidoRef(pedido)}`,
-    message: `O ${label} do seu pedido já está disponível no portal BInsight Connect. Acesse <strong>Meus Pedidos</strong> e clique em Ver ${kind === 'nf' ? 'NF' : 'boleto'}.`,
+    timelineHtml: statusChanged ? buildTimelineEmailHtml(after) : undefined,
   });
 }

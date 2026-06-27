@@ -10,11 +10,13 @@ import {
   deleteSheetRow,
   fetchSheetRange,
   getLastDataRow,
+  listSheetTitles,
   resolveSheetTitle,
   updateSheetValues,
 } from './sheetsClient';
 import { appendStatusHistory, diffStatusFields } from './statusHistory';
 import { listNfRowNums } from './nfIndexService';
+import { maybeNotifyPedidoChanges } from './pedidoNotify';
 
 const MONTH_NAMES = [
   'JANEIRO', 'FEVEREIRO', 'MARÇO', 'ABRIL', 'MAIO', 'JUNHO',
@@ -22,7 +24,11 @@ const MONTH_NAMES = [
 ];
 
 export function normalizeCNPJ(raw: string): string {
-  return raw.replace(/\D/g, '');
+  const digits = String(raw ?? '').replace(/\D/g, '');
+  if (!digits) return '';
+  if (digits.length < 14) return digits.padStart(14, '0');
+  if (digits.length > 14) return digits.slice(-14);
+  return digits;
 }
 
 export function normalizeStatusPgto(val: string): string {
@@ -51,12 +57,99 @@ export function resolveMonthlyTabFromDate(dataBR: string): string {
   return `${MONTH_NAMES[month - 1]} ${year}`;
 }
 
-function parseRow(row: string[], rowNum: number): PedidoMapa {
+const ASSINATURAS_TAB = 'ASSINATURAS';
+
+const SKIP_ORDER_TABS = new Set([
+  'DISTRIBUIDORES',
+  'VENDEDORES',
+  'COMISSÕES REPRESENTANTES',
+  'Cotacoes Distribuidores',
+]);
+
+const MONTH_TAB_PREFIXES = [
+  'janeiro',
+  'fevereiro',
+  'marco',
+  'março',
+  'abril',
+  'maio',
+  'junho',
+  'julho',
+  'agosto',
+  'setembro',
+  'outubro',
+  'novembro',
+  'dezembro',
+];
+
+function normalizeTabName(title: string): string {
+  return title
+    .trim()
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/\p{M}/gu, '');
+}
+
+function isMonthlyTab(title: string): boolean {
+  const norm = normalizeTabName(title);
+  return MONTH_TAB_PREFIXES.some((m) => norm === m || norm.startsWith(`${m} `));
+}
+
+function isMeaningfulOrderRow(p: Pick<PedidoMapa, 'nomeCliente' | 'cnpj' | 'numPedidoCli' | 'numPedidoDist'>): boolean {
+  return (
+    p.nomeCliente.trim() !== '' ||
+    p.cnpj.trim() !== '' ||
+    p.numPedidoCli.trim() !== '' ||
+    p.numPedidoDist.trim() !== ''
+  );
+}
+
+function parseAssinaturaRow(row: string[], rowNum: number): PedidoMapa {
+  const vencimento = row[13] ?? '';
   return {
     rowNum,
+    mapaTab: ASSINATURAS_TAB,
     data: row[0] ?? '',
     vendedor: row[1] ?? '',
-    cnpj: row[2] ?? '',
+    cnpj: normalizeCNPJ(row[2] ?? ''),
+    nomeCliente: row[3] ?? '',
+    numPedidoCli: row[7] ?? '',
+    prioridade: '',
+    descricaoProduto: row[11] ?? '',
+    distribuidor: row[8] ?? '',
+    numPedidoDist: '',
+    emissao: row[9] ?? '',
+    numNF: (row[10] ?? '').trim(),
+    parc1: vencimento,
+    parc2: '',
+    parc3: '',
+    parc4: '',
+    statusPgto: normalizeStatusPgto(row[14] ?? ''),
+    status: (row[15] ?? '').trim(),
+    qtd: row[16] ?? '',
+    custoDist: row[17] ?? '',
+    totalCompra: row[18] ?? '',
+    vendBins: row[19] ?? '',
+    vendaTotal: row[20] ?? '',
+    vendaPct: '',
+    bruto: row[21] ?? '',
+    liquido: '',
+    statusComissao: row[22] ?? '',
+    obsPedido: row[23] ?? '',
+    obsCliente: '',
+    observacaoCliente: '',
+    nfDriveUrl: '',
+    boletoDriveUrl: '',
+  };
+}
+
+function parseRow(row: string[], rowNum: number, mapaTab = CONSOLIDADO_TAB): PedidoMapa {
+  return {
+    rowNum,
+    mapaTab,
+    data: row[0] ?? '',
+    vendedor: row[1] ?? '',
+    cnpj: normalizeCNPJ(row[2] ?? ''),
     nomeCliente: row[3] ?? '',
     numPedidoCli: row[4] ?? '',
     prioridade: row[5] ?? '',
@@ -82,7 +175,9 @@ function parseRow(row: string[], rowNum: number): PedidoMapa {
     statusComissao: row[25] ?? '',
     obsPedido: row[26] ?? '',
     obsCliente: row[27] ?? '',
-    observacaoCliente: row[28] ?? '',
+    observacaoCliente: '',
+    nfDriveUrl: row[28] ?? '',
+    boletoDriveUrl: row[29] ?? '',
   };
 }
 
@@ -116,12 +211,13 @@ export function pedidoToRow(p: PedidoMapa): string[] {
     p.statusComissao,
     p.obsPedido,
     p.obsCliente,
-    p.observacaoCliente ?? '',
+    p.nfDriveUrl ?? '',
+    p.boletoDriveUrl ?? '',
   ];
 }
 
 function emptyPedido(rowNum: number): PedidoMapa {
-  return parseRow(Array(29).fill(''), rowNum);
+  return parseRow(Array(30).fill(''), rowNum);
 }
 
 function parseSheetDate(val: string): Date | null {
@@ -144,19 +240,34 @@ export function applyPedidosQuery(pedidos: PedidoMapa[], query: PedidosQueryPara
   }
   if (query.statusPgto?.trim()) {
     const pg = query.statusPgto.trim().toUpperCase();
-    result = result.filter((p) => normalizeStatusPgto(p.statusPgto).includes(pg));
+    result = result.filter((p) => {
+      const comissaoPaga = (p.statusComissao ?? '').trim().toUpperCase();
+      if (pg.includes('VENCID') && (comissaoPaga === 'PAGA' || comissaoPaga.includes('PAGA'))) {
+        return false;
+      }
+      return normalizeStatusPgto(p.statusPgto).includes(pg);
+    });
   }
   if (query.search?.trim()) {
-    const q = query.search.trim().toLowerCase();
-    result = result.filter(
-      (p) =>
-        p.nomeCliente.toLowerCase().includes(q) ||
-        p.cnpj.includes(q) ||
-        p.numNF.includes(q) ||
-        p.numPedidoCli.includes(q) ||
-        p.numPedidoDist.includes(q) ||
-        p.descricaoProduto.toLowerCase().includes(q)
-    );
+    const norm = (s: string) => s.trim().toLowerCase().replace(/[\s\-./_]/g, '');
+    const qRaw = norm(query.search);
+    const variants = new Set([qRaw]);
+    if (qRaw.startsWith('bin')) variants.add(qRaw.slice(3));
+    result = result.filter((p) => {
+      const blob = norm(
+        [
+          p.nomeCliente,
+          p.cnpj,
+          p.numNF,
+          p.numPedidoCli,
+          p.numPedidoDist,
+          p.descricaoProduto,
+          p.distribuidor,
+          p.vendedor,
+        ].join(' ')
+      );
+      return [...variants].some((v) => v && blob.includes(v));
+    });
   }
   if (query.dateFrom?.trim()) {
     const from = parseSheetDate(query.dateFrom.trim());
@@ -186,14 +297,59 @@ export async function enrichPedidosWithNfFlag(pedidos: PedidoMapa[]): Promise<Pe
   return pedidos.map((p) => ({ ...p, hasNfFile: nfRows.has(p.rowNum) }));
 }
 
-export async function fetchAllOrders(): Promise<PedidoMapa[]> {
-  const rows = await fetchSheetRange(
-    SPREADSHEET_MAPA_VENDAS,
-    `${CONSOLIDADO_TAB}!A2:AC5000`
-  );
+async function fetchOrdersFromTab(tab: string): Promise<PedidoMapa[]> {
+  const range =
+    tab === ASSINATURAS_TAB ? `${tab}!A2:X5000` : `${tab}!A2:AD5000`;
+  const rows = await fetchSheetRange(SPREADSHEET_MAPA_VENDAS, range);
   return rows
-    .map((row, i) => parseRow(row, i + 2))
-    .filter((p) => p.nomeCliente.trim() !== '' || p.cnpj.trim() !== '');
+    .map((row, i) =>
+      tab === ASSINATURAS_TAB
+        ? parseAssinaturaRow(row, i + 2)
+        : parseRow(row, i + 2, tab)
+    )
+    .filter(isMeaningfulOrderRow);
+}
+
+export async function fetchAllOrders(): Promise<PedidoMapa[]> {
+  const consolidado = await fetchOrdersFromTab(CONSOLIDADO_TAB);
+
+  // CONSOLIDADO preenchido → fonte única (evita duplicata e rowNum errado entre abas).
+  if (consolidado.length > 0) {
+    consolidado.sort((a, b) => {
+      const da = parseSheetDate(a.data)?.getTime() ?? 0;
+      const db = parseSheetDate(b.data)?.getTime() ?? 0;
+      return db - da;
+    });
+    return consolidado;
+  }
+
+  const all: PedidoMapa[] = [];
+
+  const titles = await listSheetTitles(SPREADSHEET_MAPA_VENDAS);
+  for (const title of titles) {
+    if (title === CONSOLIDADO_TAB || title === ASSINATURAS_TAB) continue;
+    if (SKIP_ORDER_TABS.has(title)) continue;
+    if (!isMonthlyTab(title)) continue;
+    try {
+      all.push(...(await fetchOrdersFromTab(title)));
+    } catch (err) {
+      console.warn('[orders] Falha ao ler aba mensal:', title, err);
+    }
+  }
+
+  try {
+    all.push(...(await fetchOrdersFromTab(ASSINATURAS_TAB)));
+  } catch (err) {
+    console.warn('[orders] Falha ao ler ASSINATURAS:', err);
+  }
+
+  all.sort((a, b) => {
+    const da = parseSheetDate(a.data)?.getTime() ?? 0;
+    const db = parseSheetDate(b.data)?.getTime() ?? 0;
+    return db - da;
+  });
+
+  return all;
 }
 
 export function filterOrdersForAuth(auth: AuthContext, pedidos: PedidoMapa[]): PedidoMapa[] {
@@ -283,7 +439,7 @@ export async function updateOrder(
 
   await updateSheetValues(
     SPREADSHEET_MAPA_VENDAS,
-    `${CONSOLIDADO_TAB}!A${rowNum}:AC${rowNum}`,
+    `${CONSOLIDADO_TAB}!A${rowNum}:AD${rowNum}`,
     [pedidoToRow(merged)]
   );
 
@@ -296,6 +452,12 @@ export async function updateOrder(
   );
   await appendStatusHistory(history);
 
+  if (!isClient) {
+    void maybeNotifyPedidoChanges(existing, merged).catch((err) => {
+      console.warn('[orders] Falha ao notificar cliente:', err);
+    });
+  }
+
   return merged;
 }
 
@@ -307,11 +469,41 @@ export async function deleteOrder(rowNum: number): Promise<void> {
   await deleteSheetRow(SPREADSHEET_MAPA_VENDAS, CONSOLIDADO_TAB, rowNum);
 }
 
-export async function getOrderByRowNum(rowNum: number): Promise<PedidoMapa | null> {
+export async function getOrderByRowNum(rowNum: number, mapaTab?: string): Promise<PedidoMapa | null> {
+  if (mapaTab) {
+    const colEnd = mapaTab === ASSINATURAS_TAB ? 'X' : 'AD';
+    const rows = await fetchSheetRange(
+      SPREADSHEET_MAPA_VENDAS,
+      `${mapaTab}!A${rowNum}:${colEnd}${rowNum}`
+    );
+    if (!rows[0]) return null;
+    return mapaTab === ASSINATURAS_TAB
+      ? parseAssinaturaRow(rows[0], rowNum)
+      : parseRow(rows[0], rowNum, mapaTab);
+  }
+
+  const tabsToTry = mapaTab
+    ? [mapaTab]
+    : [CONSOLIDADO_TAB, ...(await listSheetTitles(SPREADSHEET_MAPA_VENDAS)).filter(isMonthlyTab), ASSINATURAS_TAB];
+  for (const tab of tabsToTry) {
+    const pedido = await getOrderByRowNum(rowNum, tab);
+    if (pedido && isMeaningfulOrderRow(pedido)) return pedido;
+  }
+  return null;
+}
+
+export async function fetchOrderRowFromSpreadsheet(
+  spreadsheetId: string,
+  sheetName: string,
+  rowNum: number
+): Promise<PedidoMapa | null> {
+  const colEnd = sheetName === ASSINATURAS_TAB ? 'X' : 'AD';
   const rows = await fetchSheetRange(
-    SPREADSHEET_MAPA_VENDAS,
-    `${CONSOLIDADO_TAB}!A${rowNum}:AC${rowNum}`
+    spreadsheetId,
+    `${sheetName}!A${rowNum}:${colEnd}${rowNum}`
   );
   if (!rows[0]) return null;
-  return parseRow(rows[0], rowNum);
+  return sheetName === ASSINATURAS_TAB
+    ? parseAssinaturaRow(rows[0], rowNum)
+    : parseRow(rows[0], rowNum, sheetName);
 }

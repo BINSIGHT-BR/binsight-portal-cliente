@@ -72,3 +72,14 @@ export async function listNfRowNums(): Promise<Set<number>> {
   const all = await fetchAllNfRecords();
   return new Set(all.map((r) => r.rowNum));
 }
+
+export async function deleteNfForPedido(rowNum: number): Promise<NfIndexRecord | null> {
+  const nf = await getNfForPedido(rowNum);
+  if (!nf) return null;
+
+  const spreadsheetId = getRegistrySpreadsheetId();
+  await updateSheetValues(spreadsheetId, `${NF_INDEX_TAB}!A${nf.sheetRowNum}:H${nf.sheetRowNum}`, [
+    ['', '', '', '', '', '', '', ''],
+  ]);
+  return nf;
+}

@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Download, Loader2, X } from 'lucide-react';
+import { fetchOrderDocumentFromApi } from '../utils/clienteApi';
 import {
   canPreviewMime,
   downloadBlob,
@@ -10,19 +11,28 @@ import {
 interface Props {
   open: boolean;
   title: string;
-  driveUrl: string;
-  accessToken: string;
   userEmail?: string;
   onClose: () => void;
+  /** E-mail/senha: busca via Cloud Functions (service account). */
+  fetchViaBackend?: boolean;
+  rowNum?: number;
+  docKind?: 'nf' | 'boleto';
+  mapaTab?: string;
+  driveUrl?: string;
+  accessToken?: string;
 }
 
 export default function DocumentViewerModal({
   open,
   title,
-  driveUrl,
-  accessToken,
   userEmail,
   onClose,
+  fetchViaBackend = false,
+  rowNum,
+  docKind,
+  mapaTab,
+  driveUrl,
+  accessToken,
 }: Props) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -42,7 +52,35 @@ export default function DocumentViewerModal({
     setLoading(true);
     setError(null);
 
-    void fetchDriveFileForView(accessToken, driveUrl)
+    const load = async () => {
+      try {
+        if (fetchViaBackend && rowNum && docKind) {
+          const doc = await fetchOrderDocumentFromApi(rowNum, docKind, mapaTab);
+          let mimeType = doc.mimeType;
+          if (!mimeType.includes('pdf') && doc.fileName.toLowerCase().endsWith('.pdf')) {
+            mimeType = 'application/pdf';
+          }
+          const blob =
+            mimeType !== doc.mimeType ? new Blob([doc.blob], { type: mimeType }) : doc.blob;
+          const previewUrl = URL.createObjectURL(blob);
+          return {
+            fileId: String(rowNum),
+            name: doc.fileName,
+            mimeType,
+            blob,
+            previewUrl,
+          } satisfies DriveFileView;
+        }
+        if (!driveUrl?.trim() || !accessToken) {
+          throw new Error('Documento indisponível.');
+        }
+        return await fetchDriveFileForView(accessToken, driveUrl);
+      } catch (err) {
+        throw err instanceof Error ? err : new Error('Erro ao abrir documento.');
+      }
+    };
+
+    void load()
       .then((view) => {
         if (!cancelled) setFile(view);
       })
@@ -58,7 +96,7 @@ export default function DocumentViewerModal({
     return () => {
       cancelled = true;
     };
-  }, [open, driveUrl, accessToken]);
+  }, [open, driveUrl, accessToken, fetchViaBackend, rowNum, docKind, mapaTab]);
 
   useEffect(() => {
     return () => {
@@ -76,8 +114,15 @@ export default function DocumentViewerModal({
   const showPreview = file && canPreviewMime(file.mimeType);
 
   return (
-    <div className="fixed inset-0 z-[60] flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/50">
-      <div className="bg-white w-full sm:max-w-3xl max-h-[92vh] rounded-t-2xl sm:rounded-2xl shadow-2xl flex flex-col overflow-hidden">
+    <div
+      className="fixed inset-0 z-[60] flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/50"
+      onClick={onClose}
+      role="presentation"
+    >
+      <div
+        className="bg-white w-full sm:max-w-3xl max-h-[92vh] rounded-t-2xl sm:rounded-2xl shadow-2xl flex flex-col overflow-hidden"
+        onClick={(e) => e.stopPropagation()}
+      >
         <div className="flex items-center justify-between px-4 py-3 border-b border-slate-100 shrink-0">
           <div>
             <h3 className="text-sm font-bold text-slate-800">{title}</h3>
@@ -120,7 +165,11 @@ export default function DocumentViewerModal({
             <div className="absolute inset-0 flex items-center justify-center p-6">
               <div className="max-w-sm text-center rounded-xl border border-red-200 bg-red-50 p-4">
                 <p className="text-sm text-red-800">{error}</p>
-                {userEmail && (
+                {userEmail &&
+                  !error.includes('Documento ainda não disponível') &&
+                  !error.includes('não pertence ao seu CNPJ') &&
+                  !error.includes('não consegue abrir este arquivo') &&
+                  !error.includes('File not found') && (
                   <p className="text-[11px] text-red-700/80 mt-2">
                     Confirme que você entrou com <strong>{userEmail}</strong> — o mesmo e-mail aprovado
                     no cadastro BInsight.
@@ -133,11 +182,18 @@ export default function DocumentViewerModal({
           {showPreview && file && !loading && (
             <>
               {file.mimeType.includes('pdf') && (
-                <iframe
+                <object
                   title={title}
-                  src={file.previewUrl}
+                  data={file.previewUrl}
+                  type="application/pdf"
                   className="w-full h-full min-h-[50vh] sm:min-h-[420px] border-0 bg-white"
-                />
+                >
+                  <iframe
+                    title={title}
+                    src={file.previewUrl}
+                    className="w-full h-full min-h-[50vh] sm:min-h-[420px] border-0 bg-white"
+                  />
+                </object>
               )}
               {file.mimeType.startsWith('image/') && (
                 <div className="flex items-center justify-center h-full min-h-[50vh] p-4 overflow-auto">

@@ -1,7 +1,9 @@
 import { FormEvent, useState } from 'react';
+import { Link } from 'react-router-dom';
 import BinsightBrand from './BinsightBrand';
 import { USE_MOCK_DATA } from '../constants/columns';
 import type { MockLoginRole } from '../utils/mockAuth';
+import { formatAuthError, sendPortalPasswordResetEmail } from '../utils/firebase';
 
 interface Props {
   onLogin: () => void;
@@ -10,6 +12,7 @@ interface Props {
   isLoggingIn: boolean;
   authError?: string | null;
   usingMockData?: boolean;
+  variant?: 'login' | 'register';
 }
 
 export default function AuthScreen({
@@ -19,14 +22,42 @@ export default function AuthScreen({
   isLoggingIn,
   authError,
   usingMockData = USE_MOCK_DATA,
+  variant = 'login',
 }: Props) {
+  const isRegister = variant === 'register';
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [showForgot, setShowForgot] = useState(false);
+  const [forgotLoading, setForgotLoading] = useState(false);
+  const [forgotMsg, setForgotMsg] = useState<string | null>(null);
+  const [forgotError, setForgotError] = useState<string | null>(null);
   const showEmailLogin = !usingMockData && Boolean(onLoginWithCredentials);
 
   const handleEmailLogin = (e: FormEvent) => {
     e.preventDefault();
     onLoginWithCredentials?.(email.trim(), password);
+  };
+
+  const handleForgotPassword = async (e: FormEvent) => {
+    e.preventDefault();
+    const target = email.trim();
+    if (!target) {
+      setForgotError('Informe o e-mail da sua conta.');
+      return;
+    }
+    setForgotLoading(true);
+    setForgotError(null);
+    setForgotMsg(null);
+    try {
+      await sendPortalPasswordResetEmail(target);
+      setForgotMsg(
+        'Enviamos um link para redefinir sua senha. Verifique a caixa de entrada e o spam.'
+      );
+    } catch (err) {
+      setForgotError(formatAuthError(err));
+    } finally {
+      setForgotLoading(false);
+    }
   };
 
   return (
@@ -39,11 +70,27 @@ export default function AuthScreen({
 
         <div className="mt-6 bg-white py-8 px-4 shadow-xl border border-slate-100 sm:rounded-2xl sm:px-10">
           <div className="text-center space-y-2 mb-6">
-            <h2 className="text-lg font-semibold text-slate-800">Entrar no Portal</h2>
+            <h2 className="text-lg font-semibold text-slate-800">
+              {isRegister ? 'Criar conta' : 'Entrar no Portal'}
+            </h2>
             <p className="text-sm text-slate-500 leading-relaxed">
-              Clientes: e-mail e senha ou Google. Equipe BInsight: use @binsight.com.br com Google.
+              {isRegister
+                ? 'Prefira o e-mail corporativo da sua empresa. E-mails públicos podem ter cadastro negado. Após aprovação, você também poderá entrar com e-mail e senha.'
+                : 'Clientes: e-mail e senha ou Google. Equipe BInsight: use @binsight.com.br com Google.'}
             </p>
           </div>
+
+          {(forgotError || forgotMsg) && !isRegister && (
+            <div
+              className={`mb-4 rounded-lg border p-3 text-[11px] font-medium leading-relaxed ${
+                forgotMsg
+                  ? 'border-green-200 bg-green-50 text-green-800'
+                  : 'border-red-200 bg-red-50 text-red-800'
+              }`}
+            >
+              {forgotMsg ?? forgotError}
+            </div>
+          )}
 
           {authError && (
             <div className="mb-4 rounded-lg border border-red-200 bg-red-50 p-3 text-[11px] text-red-800 font-medium whitespace-pre-line leading-relaxed">
@@ -85,7 +132,7 @@ export default function AuthScreen({
             </div>
           )}
 
-          {showEmailLogin && (
+          {showEmailLogin && !isRegister && (
             <form onSubmit={handleEmailLogin} className="space-y-3 mb-5">
               <input
                 type="email"
@@ -105,6 +152,34 @@ export default function AuthScreen({
                 className="w-full text-sm border border-slate-200 rounded-xl px-3 py-2.5"
                 required
               />
+              <div className="flex justify-end">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowForgot((v) => !v);
+                    setForgotError(null);
+                    setForgotMsg(null);
+                  }}
+                  className="text-xs font-semibold text-purple-700 hover:underline"
+                >
+                  Esqueci minha senha
+                </button>
+              </div>
+              {showForgot && (
+                <div className="rounded-xl border border-purple-100 bg-purple-50/60 p-3 space-y-2">
+                  <p className="text-xs text-slate-600">
+                    Enviaremos um link para <strong>{email.trim() || 'seu e-mail'}</strong>.
+                  </p>
+                  <button
+                    type="button"
+                    disabled={forgotLoading || !email.trim()}
+                    onClick={(e) => void handleForgotPassword(e)}
+                    className="w-full py-2 text-xs font-bold uppercase tracking-wide text-purple-800 bg-white border border-purple-200 rounded-lg hover:bg-purple-50 disabled:opacity-50"
+                  >
+                    {forgotLoading ? 'Enviando…' : 'Enviar link de redefinição'}
+                  </button>
+                </div>
+              )}
               <button
                 type="submit"
                 disabled={isLoggingIn}
@@ -122,7 +197,7 @@ export default function AuthScreen({
             </form>
           )}
 
-          {showEmailLogin && (
+          {showEmailLogin && !isRegister && (
             <div className="relative mb-5">
               <div className="absolute inset-0 flex items-center">
                 <div className="w-full border-t border-slate-200" />
@@ -136,11 +211,19 @@ export default function AuthScreen({
           <button
             onClick={onLogin}
             disabled={isLoggingIn}
-            className="w-full h-11 bg-white border border-slate-300 text-slate-700 font-extrabold text-xs tracking-wider uppercase rounded-xl shadow-sm hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-purple-500 transition-all flex items-center justify-center gap-3 disabled:opacity-50 cursor-pointer"
+            className={`w-full h-11 font-extrabold text-xs tracking-wider uppercase rounded-xl transition-all flex items-center justify-center gap-3 disabled:opacity-50 cursor-pointer ${
+              isRegister
+                ? 'bg-purple-700 hover:bg-purple-800 text-white shadow-sm focus:outline-none focus:ring-2 focus:ring-purple-500'
+                : 'bg-white border border-slate-300 text-slate-700 shadow-sm hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-purple-500'
+            }`}
           >
-            {isLoggingIn && !showEmailLogin ? (
+            {isLoggingIn && (isRegister || !showEmailLogin) ? (
               <>
-                <div className="w-4 h-4 border-2 border-purple-600 border-t-transparent rounded-full animate-spin" />
+                <div
+                  className={`w-4 h-4 border-2 border-t-transparent rounded-full animate-spin ${
+                    isRegister ? 'border-white' : 'border-purple-600'
+                  }`}
+                />
                 Conectando...
               </>
             ) : (
@@ -151,10 +234,73 @@ export default function AuthScreen({
                   <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" />
                   <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" />
                 </svg>
-                Entrar com Google
+                {isRegister ? 'Continuar com Google' : 'Entrar com Google'}
               </>
             )}
           </button>
+
+          {showEmailLogin && isRegister && (
+            <>
+              <div className="relative my-5">
+                <div className="absolute inset-0 flex items-center">
+                  <div className="w-full border-t border-slate-200" />
+                </div>
+                <div className="relative flex justify-center text-[10px] uppercase">
+                  <span className="bg-white px-2 text-slate-400 font-bold tracking-wider">ou</span>
+                </div>
+              </div>
+              <form onSubmit={handleEmailLogin} className="space-y-3">
+                <p className="text-xs text-slate-500 text-center">
+                  Já recebeu senha do financeiro? Entre abaixo.
+                </p>
+                <input
+                  type="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  placeholder="E-mail"
+                  autoComplete="username"
+                  className="w-full text-sm border border-slate-200 rounded-xl px-3 py-2.5"
+                  required
+                />
+                <input
+                  type="password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder="Senha"
+                  autoComplete="current-password"
+                  className="w-full text-sm border border-slate-200 rounded-xl px-3 py-2.5"
+                  required
+                />
+                <button
+                  type="submit"
+                  disabled={isLoggingIn}
+                  className="w-full h-11 bg-white border border-slate-300 text-slate-700 font-extrabold text-xs tracking-wider uppercase rounded-xl hover:bg-slate-50 disabled:opacity-50"
+                >
+                  Entrar com e-mail e senha
+                </button>
+              </form>
+            </>
+          )}
+
+          {!usingMockData && (
+            <p className="text-center text-sm text-slate-500 mt-6 pt-4 border-t border-slate-100">
+              {isRegister ? (
+                <>
+                  Já tem conta?{' '}
+                  <Link to="/login" className="text-purple-700 font-semibold hover:underline">
+                    Entrar
+                  </Link>
+                </>
+              ) : (
+                <>
+                  Ainda não tem conta?{' '}
+                  <Link to="/criar-conta" className="text-purple-700 font-semibold hover:underline">
+                    Criar conta
+                  </Link>
+                </>
+              )}
+            </p>
+          )}
         </div>
       </div>
     </div>

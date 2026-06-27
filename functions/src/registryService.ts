@@ -3,6 +3,7 @@ import {
   CLIENT_PORTAL_REGISTRY_TAB,
   ClientAccessStatus,
   ClientPortalRecord,
+  NotifyRecipient,
   getRegistrySpreadsheetId,
 } from './constants';
 import {
@@ -11,6 +12,7 @@ import {
   listSheetTitles,
   updateSheetValues,
 } from './sheetsClient';
+import { displayContactName } from './clientContact';
 import { notifyFinanceiroNewRegistration } from './emailService';
 
 function normalizeEmail(email: string): string {
@@ -19,6 +21,25 @@ function normalizeEmail(email: string): string {
 
 function normalizeCNPJ(raw: string): string {
   return raw.replace(/\D/g, '');
+}
+
+function parseNotifyFlag(raw: string): boolean {
+  const s = String(raw ?? '').trim().toLowerCase();
+  if (s === 'não' || s === 'nao' || s === 'n' || s === 'false' || s === '0') return false;
+  return true;
+}
+
+function allCnpjsFromRecord(r: ClientPortalRecord): string[] {
+  const set = new Set<string>();
+  if (r.cnpj) {
+    const c = normalizeCNPJ(r.cnpj);
+    if (c.length >= 11) set.add(c);
+  }
+  for (const raw of r.additionalCnpjs) {
+    const c = normalizeCNPJ(raw);
+    if (c.length >= 11) set.add(c);
+  }
+  return Array.from(set);
 }
 
 function parseRegistryRow(row: string[], rowNum: number): ClientPortalRecord | null {
@@ -38,6 +59,9 @@ function parseRegistryRow(row: string[], rowNum: number): ClientPortalRecord | n
     approvedBy: String(row[4] ?? '').trim(),
     approvedAt: String(row[5] ?? '').trim(),
     additionalCnpjs: extras,
+    notifyEmail: parseNotifyFlag(String(row[7] ?? '')),
+    nomeContato: String(row[8] ?? '').trim(),
+    sobrenomeContato: String(row[9] ?? '').trim(),
     rowNum,
   };
 }
@@ -52,7 +76,7 @@ async function resolveRegistryTab(): Promise<string> {
 export async function fetchRegistryRecords(): Promise<ClientPortalRecord[]> {
   const spreadsheetId = getRegistrySpreadsheetId();
   const tab = await resolveRegistryTab();
-  const rows = await fetchSheetRange(spreadsheetId, `${tab}!A2:G2000`);
+  const rows = await fetchSheetRange(spreadsheetId, `${tab}!A2:J2000`);
   return rows
     .map((row, i) => parseRegistryRow(row, i + 2))
     .filter((r): r is ClientPortalRecord => r !== null);
@@ -64,6 +88,29 @@ export async function fetchRegistryForEmail(
   const target = normalizeEmail(email);
   const all = await fetchRegistryRecords();
   return all.find((r) => r.email === target) ?? null;
+}
+
+/** E-mails ATIVOS com NOTIFY=Sim para o CNPJ do pedido. */
+export async function fetchNotifyRecipientsForCnpj(cnpj: string): Promise<string[]> {
+  const profiles = await fetchNotifyRecipientProfilesForCnpj(cnpj);
+  return profiles.map((p) => p.email);
+}
+
+/** Destinatários com nome cadastrado (cols I/J ou col B) para saudação no e-mail. */
+export async function fetchNotifyRecipientProfilesForCnpj(
+  cnpj: string
+): Promise<NotifyRecipient[]> {
+  const digits = normalizeCNPJ(cnpj);
+  if (digits.length < 11) return [];
+  const records = await fetchRegistryRecords();
+  const out: NotifyRecipient[] = [];
+  for (const r of records) {
+    if (r.status !== 'ATIVO' || !r.notifyEmail) continue;
+    if (allCnpjsFromRecord(r).includes(digits)) {
+      out.push({ email: r.email, displayName: displayContactName(r) });
+    }
+  }
+  return out;
 }
 
 export async function registerClientAccess(
@@ -81,7 +128,7 @@ export async function registerClientAccess(
   if (digits.length < 11) throw new Error('Informe um CNPJ válido.');
 
   await appendSheetRows(spreadsheetId, tab, [
-    [normalizeEmail(email), nome.trim(), digits, 'PENDENTE', '', '', ''],
+    [normalizeEmail(email), nome.trim(), digits, 'PENDENTE', '', '', '', 'Sim'],
   ]);
 
   const record: ClientPortalRecord = {
@@ -92,6 +139,7 @@ export async function registerClientAccess(
     approvedBy: '',
     approvedAt: '',
     additionalCnpjs: [],
+    notifyEmail: true,
     rowNum: 0,
   };
 
@@ -123,7 +171,7 @@ export async function createRegistryRecord(
   const extras = additionalCnpjs.map(normalizeCNPJ).filter((s) => s.length >= 11).join(';');
 
   await appendSheetRows(spreadsheetId, tab, [
-    [normalizeEmail(email), nome.trim(), digits, 'PENDENTE', '', '', extras],
+    [normalizeEmail(email), nome.trim(), digits, 'PENDENTE', '', '', extras, 'Sim'],
   ]);
 
   return {
@@ -134,6 +182,7 @@ export async function createRegistryRecord(
     approvedBy: '',
     approvedAt: '',
     additionalCnpjs: extras ? extras.split(';') : [],
+    notifyEmail: true,
     rowNum: 0,
   };
 }
@@ -150,7 +199,7 @@ export async function updateRegistryRecord(
 ): Promise<void> {
   const spreadsheetId = getRegistrySpreadsheetId();
   const tab = await resolveRegistryTab();
-  const rows = await fetchSheetRange(spreadsheetId, `${tab}!A2:G2000`);
+  const rows = await fetchSheetRange(spreadsheetId, `${tab}!A2:J2000`);
   const target = normalizeEmail(email);
 
   for (let i = 0; i < rows.length; i++) {
@@ -173,8 +222,8 @@ export async function updateRegistryRecord(
         ? updates.additionalCnpjs.map(normalizeCNPJ).filter((s) => s.length >= 11).join(';')
         : current.additionalCnpjs.join(';');
 
-    await updateSheetValues(spreadsheetId, `${tab}!A${rowNum}:G${rowNum}`, [
-      [target, nome, cnpj, status, approvedBy, approvedAt, extras],
+    await updateSheetValues(spreadsheetId, `${tab}!A${rowNum}:H${rowNum}`, [
+      [target, nome, cnpj, status, approvedBy, approvedAt, extras, current.notifyEmail ? 'Sim' : 'Não'],
     ]);
     return;
   }
@@ -184,14 +233,14 @@ export async function updateRegistryRecord(
 export async function deleteRegistryRecord(email: string): Promise<void> {
   const spreadsheetId = getRegistrySpreadsheetId();
   const tab = await resolveRegistryTab();
-  const rows = await fetchSheetRange(spreadsheetId, `${tab}!A2:G2000`);
+  const rows = await fetchSheetRange(spreadsheetId, `${tab}!A2:J2000`);
   const target = normalizeEmail(email);
 
   for (let i = 0; i < rows.length; i++) {
     if (normalizeEmail(String(rows[i][0] ?? '')) === target) {
       const rowNum = i + 2;
-      await updateSheetValues(spreadsheetId, `${tab}!A${rowNum}:G${rowNum}`, [
-        ['', '', '', 'REVOGADO', '', '', ''],
+      await updateSheetValues(spreadsheetId, `${tab}!A${rowNum}:H${rowNum}`, [
+        ['', '', '', 'REVOGADO', '', '', '', ''],
       ]);
       return;
     }

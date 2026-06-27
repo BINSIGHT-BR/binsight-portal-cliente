@@ -1,8 +1,36 @@
 import { CONSOLIDADO_COL_COUNT } from '../constants/columns';
 import { PedidoMapa } from '../types';
+import { formatBRLDisplay } from './brl';
+
+/** Valor de célula da Sheets API → string estável (evita notação científica em números longos). */
+export function cellStr(v: unknown): string {
+  if (v == null || v === '') return '';
+  if (typeof v === 'number') {
+    if (Number.isInteger(v) && Math.abs(v) >= 1e10) return v.toFixed(0);
+    return String(v);
+  }
+  return String(v).trim();
+}
+
+/** Linha do CONSOLIDADO com dados mínimos para aparecer no portal. */
+export function isMeaningfulMapaRow(p: Pick<PedidoMapa, 'nomeCliente' | 'cnpj' | 'numPedidoCli' | 'numPedidoDist' | 'numNF' | 'descricaoProduto'>): boolean {
+  if (p.nomeCliente.trim() || p.cnpj.trim()) return true;
+  if (p.numPedidoCli.trim() || p.numPedidoDist.trim()) return true;
+  if (p.numNF.trim() || p.descricaoProduto.trim()) return true;
+  return false;
+}
 
 export function normalizeCNPJ(raw: string): string {
-  return raw.replace(/\D/g, '');
+  const digits = String(raw ?? '').replace(/\D/g, '');
+  if (!digits) return '';
+  // Planilha/Google Sheets pode remover zeros à esquerda (ex.: 1597589000110 → 01597589000110)
+  if (digits.length > 0 && digits.length < 14) {
+    return digits.padStart(14, '0');
+  }
+  if (digits.length > 14) {
+    return digits.slice(-14);
+  }
+  return digits;
 }
 
 export function formatCNPJ(digits: string): string {
@@ -65,10 +93,19 @@ export function pedidoToMapaRow(p: PedidoMapa): string[] {
   return row.slice(0, CONSOLIDADO_COL_COUNT);
 }
 
+export function isValidMapaCnpj(raw: string): boolean {
+  return normalizeCNPJ(raw).length === 14;
+}
+
 export function filterOrdersByCnpjs(pedidos: PedidoMapa[], cnpjs: string[]): PedidoMapa[] {
-  const set = new Set(cnpjs.map(normalizeCNPJ));
+  const set = new Set(
+    cnpjs.map(normalizeCNPJ).filter((c) => c.length === 14)
+  );
   if (set.size === 0) return [];
-  return pedidos.filter((p) => set.has(normalizeCNPJ(p.cnpj)));
+  return pedidos.filter((p) => {
+    const c = normalizeCNPJ(p.cnpj);
+    return c.length === 14 && set.has(c);
+  });
 }
 
 export function parseSheetDate(val: string): Date | null {
@@ -84,9 +121,7 @@ export function parseSheetDate(val: string): Date | null {
 }
 
 export function fmtBRL(v: string): string {
-  const n = parseFloat(v.replace(/\./g, '').replace(',', '.').replace(/[^0-9.-]/g, ''));
-  if (isNaN(n)) return v || '—';
-  return n.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+  return formatBRLDisplay(v);
 }
 
 export function isoDateToBR(iso: string): string {

@@ -5,6 +5,12 @@ import { normalizeCNPJ } from './ordersCore';
 const ROOT = 'BInsight Connect';
 const CLIENTES = 'Clientes';
 
+/** Service accounts do backend — precisam de leitor nos PDFs para clientes e-mail/senha. */
+const DRIVE_READER_SERVICE_ACCOUNTS = [
+  'comercial-binsight@appspot.gserviceaccount.com',
+  '876892830548-compute@developer.gserviceaccount.com',
+];
+
 interface DriveFile {
   id: string;
   name?: string;
@@ -166,6 +172,7 @@ export async function uploadClientDocument(
     if (shareWithEmails.length) {
       await shareDriveFileWithEmails(token, created.id, shareWithEmails);
     }
+    await shareDriveFileWithEmails(token, created.id, DRIVE_READER_SERVICE_ACCOUNTS);
 
     let webViewLink = created.webViewLink ?? '';
     if (!webViewLink) {
@@ -181,6 +188,21 @@ export async function uploadClientDocument(
       webViewLink,
       fileName: created.name ?? file.name,
     };
+  });
+}
+
+/** Move arquivo para a lixeira do Drive (best-effort). */
+export async function trashDriveFile(accessToken: string, fileId: string): Promise<void> {
+  await withTokenRetry(accessToken, async (token) => {
+    await driveJson(
+      token,
+      `https://www.googleapis.com/drive/v3/files/${fileId}?supportsAllDrives=true`,
+      {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ trashed: true }),
+      }
+    );
   });
 }
 

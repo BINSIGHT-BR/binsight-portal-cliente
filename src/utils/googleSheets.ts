@@ -1,4 +1,4 @@
-import { getAccessToken, isGoogleAuthExpiredError, refreshGoogleAccessToken } from './firebase';
+import { getAccessToken, isGoogleAuthExpiredError, clearSheetsAccessCache } from './firebase';
 
 async function activeToken(preferred: string): Promise<string> {
   return (await getAccessToken()) ?? preferred;
@@ -12,7 +12,10 @@ export async function withTokenRetry<T>(
     return await fn(await activeToken(accessToken));
   } catch (err) {
     if (isGoogleAuthExpiredError(err)) {
-      return fn(await refreshGoogleAccessToken());
+      clearSheetsAccessCache();
+      throw new Error(
+        'Acesso às planilhas Google expirou. Clique em "Conectar planilhas" no topo da página.'
+      );
     }
     throw err;
   }

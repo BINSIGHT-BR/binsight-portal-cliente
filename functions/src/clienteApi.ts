@@ -30,9 +30,40 @@ import {
 import { ClientAccessStatus, PedidosQueryParams } from './constants';
 import { fetchStatusHistoryForRow } from './statusHistory';
 import { parseMultipartUpload } from './multipartParser';
-import { ensureNfFolder, extractYearFromDateBR, getTemporaryDownloadUrl, uploadNfFile } from './driveService';
-import { getNfForPedido, upsertNfIndex } from './nfIndexService';
+import { ensureNfFolder, extractDriveFileId, extractYearFromDateBR, fetchDriveFileBuffer, getTemporaryDownloadUrl, trashDriveFile, uploadNfFile } from './driveService';
+import { deleteNfForPedido, getNfForPedido, upsertNfIndex } from './nfIndexService';
 import { resetClientPassword } from './passwordService';
+import { sendClientePedidoEmails } from './emailService';
+import { NotifyRecipient } from './constants';
+import { notifyFromSheetColumnEdit } from './sheetNotifyBridge';
+
+function validateNotifySecret(secret: string): boolean {
+  const expected = (process.env.NOTIFY_SECRET ?? '').trim();
+  if (!expected) {
+    console.warn('[notify] NOTIFY_SECRET não configurado na função.');
+    return false;
+  }
+  return secret.trim() === expected;
+}
+
+function parseNotifyRecipients(raw: unknown): NotifyRecipient[] {
+  if (!Array.isArray(raw)) return [];
+  const out: NotifyRecipient[] = [];
+  for (const item of raw) {
+    if (typeof item === 'string') {
+      const email = item.trim().toLowerCase();
+      if (email) out.push({ email, displayName: '' });
+      continue;
+    }
+    if (item && typeof item === 'object') {
+      const obj = item as Record<string, unknown>;
+      const email = String(obj.email ?? '').trim().toLowerCase();
+      const displayName = String(obj.displayName ?? obj.nome ?? '').trim();
+      if (email) out.push({ email, displayName });
+    }
+  }
+  return out;
+}
 
 const ALLOWED_ORIGINS = [
   'https://connect-binsight.web.app',
@@ -46,7 +77,7 @@ function setCors(req: { headers: { origin?: string } }, res: { set: (k: string, 
     res.set('Access-Control-Allow-Origin', origin);
   }
   res.set('Access-Control-Allow-Methods', 'GET, POST, PATCH, DELETE, OPTIONS');
-  res.set('Access-Control-Allow-Headers', 'Authorization, Content-Type');
+  res.set('Access-Control-Allow-Headers', 'Authorization, Content-Type, X-Firebase-Authorization');
   res.set('Access-Control-Max-Age', '3600');
 }
 
@@ -100,7 +131,15 @@ async function assertPedidoAccess(
 }
 
 export const clienteApi = onRequest(
-  { region: 'southamerica-east1', cors: false, maxInstances: 10, timeoutSeconds: 120, memory: '512MiB' },
+  {
+    region: 'southamerica-east1',
+    cors: false,
+    maxInstances: 10,
+    timeoutSeconds: 120,
+    memory: '512MiB',
+    /** Hosting + browser enviam Bearer Firebase; validação na função (authenticateRequest). */
+    invoker: 'public',
+  },
   async (req, res) => {
     setCors(req, res);
 
@@ -110,12 +149,54 @@ export const clienteApi = onRequest(
     }
 
     try {
-      const auth = await authenticateRequest(req);
       const parts = parsePath(req.url || req.path || '');
       const resource = parts[0] ?? '';
       const sub = parts[1];
       const action = parts[2];
       const query = parseQuery(req.url || '');
+
+      if (resource === 'notify' && sub === 'cliente-pedido' && req.method === 'POST') {
+        const body = (req.body ?? {}) as Record<string, unknown>;
+        if (!validateNotifySecret(String(body.secret ?? ''))) {
+          throw new HttpError(401, 'Unauthorized');
+        }
+        const recipients = parseNotifyRecipients(body.recipients);
+        const result = await sendClientePedidoEmails({
+          recipients,
+          pedidoRef: String(body.pedidoRef ?? 'Pedido'),
+          nomeCliente: String(body.nomeCliente ?? ''),
+          subject: String(body.subject ?? '[BInsight] Atualização do seu pedido'),
+          message: String(body.message ?? ''),
+          timelineHtml: body.timelineHtml ? String(body.timelineHtml) : undefined,
+        });
+        if (recipients.length > 0 && result.sent === 0) {
+          throw new HttpError(
+            500,
+            `E-mail não enviado: ${result.failed.join('; ') || 'Gmail/SMTP indisponível'}`
+          );
+        }
+        json(res, 200, { ok: true, sent: result.sent, failed: result.failed });
+        return;
+      }
+
+      if (resource === 'notify' && sub === 'cliente-pedido-row' && req.method === 'POST') {
+        const body = (req.body ?? {}) as Record<string, unknown>;
+        if (!validateNotifySecret(String(body.secret ?? ''))) {
+          throw new HttpError(401, 'Unauthorized');
+        }
+        await notifyFromSheetColumnEdit({
+          spreadsheetId: String(body.spreadsheetId ?? ''),
+          sheetName: String(body.sheetName ?? ''),
+          rowNum: Number(body.rowNum ?? 0),
+          column: Number(body.column ?? 0),
+          oldValue: String(body.oldValue ?? ''),
+          newValue: String(body.newValue ?? ''),
+        });
+        json(res, 200, { ok: true });
+        return;
+      }
+
+      const auth = await authenticateRequest(req);
 
       if (resource === 'me' && req.method === 'GET') {
         json(res, 200, {
@@ -162,17 +243,48 @@ export const clienteApi = onRequest(
           if (!seesAllOrders(auth)) {
             throw new ForbiddenError('Acesso restrito à equipe BInsight.');
           }
-          const pedido = await getOrderByRowNum(rowNum);
+          const pedido = await getOrderByRowNum(rowNum, query.tab?.trim() || undefined);
           if (!pedido) throw new HttpError(404, 'Pedido não encontrado.');
           const historico = await fetchStatusHistoryForRow(rowNum);
           json(res, 200, { historico });
           return;
         }
 
+        if (req.method === 'GET' && sub && action === 'document' && parts[3]) {
+          const rowNum = parseInt(sub, 10);
+          const docKind = parts[3];
+          if (!rowNum) throw new HttpError(400, 'Número de linha inválido.');
+          if (docKind !== 'nf' && docKind !== 'boleto') {
+            throw new HttpError(400, 'Tipo de documento inválido.');
+          }
+          const pedido = await getOrderByRowNum(rowNum, query.tab?.trim() || undefined);
+          if (!pedido) throw new HttpError(404, 'Pedido não encontrado.');
+          await assertPedidoAccess(auth, pedido);
+          const driveUrl = docKind === 'nf' ? pedido.nfDriveUrl : pedido.boletoDriveUrl;
+          if (!driveUrl?.trim()) {
+            throw new HttpError(404, 'Documento ainda não disponível.');
+          }
+          const fileId = extractDriveFileId(driveUrl);
+          if (!fileId) throw new HttpError(400, 'Link do documento inválido.');
+          let file;
+          try {
+            file = await fetchDriveFileBuffer(fileId);
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : 'Erro ao abrir documento no Drive.';
+            throw new HttpError(404, msg);
+          }
+          json(res, 200, {
+            fileName: file.fileName,
+            mimeType: file.mimeType,
+            dataBase64: file.buffer.toString('base64'),
+          });
+          return;
+        }
+
         if (req.method === 'GET' && sub && action === 'nf') {
           const rowNum = parseInt(sub, 10);
           if (!rowNum) throw new HttpError(400, 'Número de linha inválido.');
-          const pedido = await getOrderByRowNum(rowNum);
+          const pedido = await getOrderByRowNum(rowNum, query.tab?.trim() || undefined);
           if (!pedido) throw new HttpError(404, 'Pedido não encontrado.');
           await assertPedidoAccess(auth, pedido);
           const nf = await getNfForPedido(rowNum);
@@ -193,7 +305,7 @@ export const clienteApi = onRequest(
           }
           const rowNum = parseInt(sub, 10);
           if (!rowNum) throw new HttpError(400, 'Número de linha inválido.');
-          const pedido = await getOrderByRowNum(rowNum);
+          const pedido = await getOrderByRowNum(rowNum, query.tab?.trim() || undefined);
           if (!pedido) throw new HttpError(404, 'Pedido não encontrado.');
 
           const upload = await parseMultipartUpload(req);
@@ -224,6 +336,32 @@ export const clienteApi = onRequest(
           return;
         }
 
+        if (req.method === 'DELETE' && sub && action === 'nf') {
+          if (!canEditOrders(auth)) {
+            throw new ForbiddenError('Sem permissão para remover NF.');
+          }
+          const rowNum = parseInt(sub, 10);
+          if (!rowNum) throw new HttpError(400, 'Número de linha inválido.');
+          const pedido = await getOrderByRowNum(rowNum, query.tab?.trim() || undefined);
+          if (!pedido) throw new HttpError(404, 'Pedido não encontrado.');
+
+          const nf = await deleteNfForPedido(rowNum);
+          if (nf?.fileId) {
+            try {
+              await trashDriveFile(nf.fileId);
+            } catch (err) {
+              console.warn('[drive] NF removida do índice; arquivo no Drive não excluído.', err);
+            }
+          }
+
+          if (pedido.nfDriveUrl?.trim()) {
+            await updateOrder(auth, rowNum, { nfDriveUrl: '' });
+          }
+
+          json(res, 200, { ok: true });
+          return;
+        }
+
         if (req.method === 'POST' && !sub) {
           if (!canEditOrders(auth)) {
             throw new ForbiddenError('Sem permissão para criar pedidos.');
@@ -250,7 +388,7 @@ export const clienteApi = onRequest(
           return;
         }
 
-        if (req.method === 'DELETE' && sub) {
+        if (req.method === 'DELETE' && sub && !action) {
           if (!canEditOrders(auth)) {
             throw new ForbiddenError('Sem permissão para excluir pedidos.');
           }
@@ -330,7 +468,11 @@ export const clienteApi = onRequest(
         return;
       }
       console.error('[clienteApi]', err);
-      const msg = err instanceof Error ? err.message : 'Erro interno';
+      const raw = err instanceof Error ? err.message : 'Erro interno';
+      const msg =
+        /PERMISSION_DENIED|permission|403/i.test(raw)
+          ? 'Sem permissão para ler a planilha. Compartilhe Mapa e Registry como Editor com a conta de serviço do Firebase (ver BACKEND_SETUP.md).'
+          : raw;
       json(res, 500, { error: msg });
     }
   }

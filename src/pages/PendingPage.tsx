@@ -1,8 +1,8 @@
-import { Loader2, RefreshCw, UserCircle } from 'lucide-react';
+import { Loader2, RefreshCw } from 'lucide-react';
 import BinsightBrand from '../components/BinsightBrand';
 import { useAuth } from '../contexts/AuthContext';
 import { useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 
 interface Props {
   variant: 'pendente' | 'revogado';
@@ -70,13 +70,6 @@ export default function PendingPage({ variant }: Props) {
               )}
               Verificar status
             </button>
-            <Link
-              to="/perfil"
-              className="inline-flex items-center gap-2 text-sm font-semibold text-slate-600 hover:text-purple-700"
-            >
-              <UserCircle className="w-4 h-4" />
-              Preferências de e-mail
-            </Link>
           </div>
         )}
       </div>

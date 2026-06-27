@@ -93,6 +93,19 @@ export const CONSOLIDADO_COLUMNS: ConsolidadoColumnDef[] = [
   },
 ];
 
+/** Colunas monetárias (formato R$ na UI). */
+export const MAPA_MONEY_KEYS = [
+  'custoDist',
+  'totalCompra',
+  'vendBins',
+  'vendaTotal',
+  'bruto',
+  'liquido',
+] as const;
+
+/** Colunas calculadas a partir de Qtd × unitários (S, U). */
+export const MAPA_DERIVED_KEYS = ['totalCompra', 'vendaTotal', 'vendaPct', 'bruto'] as const;
+
 /** Mapa Vendas 2026 — fallback quando VITE_MAPA_SPREADSHEET_ID não está definido. */
 export const SPREADSHEET_MAPA_VENDAS = '1xLp12EAjknPVJWJPNivvPfe5BQhut6jMeYr8qHJ7foI';
 

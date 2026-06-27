@@ -43,17 +43,11 @@ function apiOrigin(): string {
   return '';
 }
 
-async function getIdToken(): Promise<string> {
-  const user = auth.currentUser;
-  if (!user) throw new Error('Sessão expirada. Faça login novamente.');
-  return user.getIdToken();
-}
-
-async function apiFetch<T>(path: string, options: RequestInit = {}): Promise<T> {
-  const token = await getIdToken();
+async function apiFetch<T>(path: string, options: RequestInit = {}, retried = false): Promise<T> {
+  const token = await getIdToken(retried);
   const base = apiOrigin();
   const headers: Record<string, string> = {
-    Authorization: `Bearer ${token}`,
+    'X-Firebase-Authorization': `Bearer ${token}`,
     ...(options.headers as Record<string, string> | undefined),
   };
   if (!(options.body instanceof FormData)) {
@@ -63,11 +57,29 @@ async function apiFetch<T>(path: string, options: RequestInit = {}): Promise<T> 
     ...options,
     headers,
   });
-  const body = await res.json().catch(() => ({}));
-  if (!res.ok) {
-    throw new Error((body as { error?: string }).error || `Erro na API (${res.status})`);
+  const text = await res.text();
+  let body: { error?: string } = {};
+  try {
+    body = JSON.parse(text) as { error?: string };
+  } catch {
+    if (!res.ok && text.includes('401')) {
+      if (!retried) return apiFetch<T>(path, options, true);
+      throw new Error('Sessão expirada. Saia e entre novamente.');
+    }
   }
-  return body as T;
+  if (!res.ok) {
+    if (res.status === 401 && !retried) {
+      return apiFetch<T>(path, options, true);
+    }
+    throw new Error(body.error || `Erro na API (${res.status})`);
+  }
+  return JSON.parse(text) as T;
+}
+
+async function getIdToken(forceRefresh = false): Promise<string> {
+  const user = auth.currentUser;
+  if (!user) throw new Error('Sessão expirada. Faça login novamente.');
+  return user.getIdToken(forceRefresh);
 }
 
 function toAccessRecord(raw: {
@@ -111,6 +123,25 @@ export async function fetchMeFromApi(): Promise<{
 }> {
   const data = await apiFetch<{ portalUser: PortalUser; clientStatus: ClientStatus }>('me');
   return data;
+}
+
+export async function fetchOrderDocumentFromApi(
+  rowNum: number,
+  kind: 'nf' | 'boleto',
+  mapaTab?: string
+): Promise<{ fileName: string; mimeType: string; blob: Blob }> {
+  const tabQs = mapaTab?.trim() ? `?tab=${encodeURIComponent(mapaTab.trim())}` : '';
+  const data = await apiFetch<{ fileName: string; mimeType: string; dataBase64: string }>(
+    `pedidos/${rowNum}/document/${kind}${tabQs}`
+  );
+  const binary = atob(data.dataBase64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return {
+    fileName: data.fileName,
+    mimeType: data.mimeType,
+    blob: new Blob([bytes], { type: data.mimeType }),
+  };
 }
 
 export async function fetchPedidosFromApi(filters?: PedidosFilters): Promise<PedidoMapa[]> {
@@ -161,6 +192,10 @@ export async function uploadNfViaApi(rowNum: number, file: File): Promise<void> 
   const form = new FormData();
   form.append('file', file);
   await apiFetch(`pedidos/${rowNum}/nf`, { method: 'POST', body: form });
+}
+
+export async function deleteNfViaApi(rowNum: number): Promise<void> {
+  await apiFetch(`pedidos/${rowNum}/nf`, { method: 'DELETE' });
 }
 
 export async function createPedidoViaApi(pedido: Partial<PedidoMapa>): Promise<PedidoMapa> {

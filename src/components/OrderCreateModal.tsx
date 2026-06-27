@@ -6,7 +6,7 @@ import { OBS_CLIENTE_STATUSES } from '../constants/obsCliente';
 import { brDateToIso, isoDateToBR } from '../utils/orders';
 import { computeOrderDerivedFields } from '../utils/orderCalculations';
 import { formatBRLDisplay } from '../utils/brl';
-import { deriveStatusPgtoFromDates } from '../utils/ordersCore';
+import { deriveStatusPgtoFromParcels } from '../utils/parcelPayment';
 import ParcelVencimentoFields, { formInputCls as inputCls } from './ParcelVencimentoFields';
 import type { MapaKind } from '../types';
 import {
@@ -164,12 +164,12 @@ export default function OrderCreateModal({ user, accessToken, onClose, onSubmit 
         cnpj: form.cnpj?.trim() ?? '',
       };
       if (mapaKind === 'pedido') {
-        payload.statusPgto = deriveStatusPgtoFromDates([
+        payload.statusPgto = deriveStatusPgtoFromParcels(
           form.parc1 ?? '',
           form.parc2 ?? '',
           form.parc3 ?? '',
-          form.parc4 ?? '',
-        ]);
+          form.parc4 ?? ''
+        );
       } else {
         const venc = (form.vencimento ?? form.parc1 ?? '').trim();
         payload.vencimento = venc;

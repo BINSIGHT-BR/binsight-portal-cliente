@@ -9,6 +9,8 @@ export interface PedidoMapa {
   mapaSpreadsheetId?: string;
   /** Ano do pedido (col data ou mapa arquivado). */
   mapaYear?: number;
+  /** Aba de origem no Mapa (CONSOLIDADO, Janeiro, …). */
+  mapaTab?: string;
   /** A — Data do pedido */
   data: string;
   /** B */
@@ -89,10 +91,18 @@ export interface PedidoCliente {
   vendaTotal: string;
   status: string;
   statusPgto: string;
+  /** Usado só para derivar label (col Z — não exibido ao cliente). */
+  statusComissao?: string;
   emissao: string;
   numNF: string;
   obsCliente: string;
   observacaoCliente: string;
+  /** Distribuidor do pedido (visível ao cliente). */
+  distribuidor: string;
+  /** Vendedor BInsight que atendeu (visível ao cliente). */
+  vendedor: string;
+  /** Aba de origem no Mapa (CONSOLIDADO, Janeiro, …). */
+  mapaTab?: string;
   nfDriveUrl?: string;
   boletoDriveUrl?: string;
   hasNfFile?: boolean;
@@ -141,6 +151,7 @@ export interface ClientPortalUser {
 /** @deprecated Use ClientPortalUser */
 export interface ClientAccessRecord {
   email: string;
+  /** Col B — empresa ou nome de exibição no portal */
   nome: string;
   cnpj: string;
   status: ClientAccessStatus;
@@ -148,6 +159,12 @@ export interface ClientAccessRecord {
   dataAprovacao: string;
   cnpjsAdicionais: string[];
   notifyEmail: boolean;
+  /** Col I — nome do contato */
+  nomeContato?: string;
+  /** Col J — sobrenome do contato */
+  sobrenomeContato?: string;
+  /** Cadastro criado via Firebase (ainda não na planilha) */
+  firestoreUid?: string;
 }
 
 export type ClientAccessStatus = 'PENDENTE' | 'ATIVO' | 'REVOGADO';

@@ -1,4 +1,5 @@
 import { getTimelineStages } from '../constants/timeline';
+import { isPedidoEntregue } from './clientOrderStatus';
 import { PedidoCliente, PedidoMapa, TimelineStageId, TipoProdutoPedido } from '../types';
 
 function emissaoIsSim(val: string): boolean {
@@ -19,7 +20,16 @@ export function resolveTimelineProgress(
   const status = pedido.status ?? '';
   const obs = ('obsCliente' in pedido ? pedido.obsCliente : '') ?? '';
   const emissao = pedido.emissao ?? '';
+  const statusComissao =
+    'statusComissao' in pedido ? String(pedido.statusComissao ?? '') : '';
   const obsLower = obs.toLowerCase();
+  const entregue = isPedidoEntregue({
+    status,
+    statusComissao,
+    obsCliente: obs,
+    emissao,
+    data: pedido.data,
+  });
 
   const completed: TimelineStageId[] = ['confirmado'];
 
@@ -41,6 +51,25 @@ export function resolveTimelineProgress(
     completed.push('faturado');
   } else {
     return { current: 'credito', completed };
+  }
+
+  // Col Z PAGA ou status entregue → concluído
+  if (entregue) {
+    if (tipo === 'software') {
+      completed.push('licenca');
+      return { current: 'licenca', completed };
+    }
+    completed.push('rota', 'entregue');
+    return { current: 'entregue', completed };
+  }
+
+  // Col Q FATURADO (sem Z PAGA) → faturado + em processo de entrega
+  if (statusIncludes(status, 'FATURADO')) {
+    if (tipo === 'software') {
+      return { current: 'faturado', completed };
+    }
+    completed.push('rota');
+    return { current: 'rota', completed };
   }
 
   if (tipo === 'software') {

@@ -1,17 +1,20 @@
 import { FormEvent, useEffect, useState } from 'react';
 import { Bell, BellOff, KeyRound, Loader2, Save } from 'lucide-react';
-import { Link } from 'react-router-dom';
+import { Navigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { updateNotifyPreference } from '../utils/clientAccess';
 import { USE_MOCK_DATA, USE_OAUTH_SHEETS } from '../constants/columns';
 import { changeSheetPassword } from '../utils/connectPortalApi';
 import {
   changePortalPassword,
+  formatAuthError,
   sendPortalPasswordResetEmail,
+  userHasPasswordProvider,
+  userIsGoogleOnly,
 } from '../utils/firebase';
 
 export default function ProfilePage() {
-  const { portalUser, token, clientStatus, refreshProfile, authProvider } = useAuth();
+  const { portalUser, token, clientStatus, refreshProfile, authProvider, user } = useAuth();
   const [notifyEmail, setNotifyEmail] = useState(portalUser?.notifyEmail !== false);
   const [loading, setLoading] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -23,6 +26,9 @@ export default function ProfilePage() {
   const [confirmPassword, setConfirmPassword] = useState('');
 
   const isSheetAuth = authProvider === 'sheet';
+  const isFirebaseEmail = authProvider === 'firebase-email';
+  const hasPassword = userHasPasswordProvider(user);
+  const isGoogleOnly = userIsGoogleOnly(user);
   const mockHint = USE_MOCK_DATA || (!USE_OAUTH_SHEETS && !isSheetAuth);
 
   useEffect(() => {
@@ -30,6 +36,12 @@ export default function ProfilePage() {
   }, [portalUser?.notifyEmail]);
 
   if (!portalUser) return null;
+
+  if (portalUser.role === 'cliente' && clientStatus !== 'ativo') {
+    if (clientStatus === 'pendente') return <Navigate to="/aguardando" replace />;
+    if (clientStatus === 'revogado') return <Navigate to="/revogado" replace />;
+    return <Navigate to="/cadastro" replace />;
+  }
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
@@ -54,9 +66,9 @@ export default function ProfilePage() {
     setError(null);
     try {
       await sendPortalPasswordResetEmail(portalUser.email);
-      setPwdMsg('Enviamos um link para redefinir/definir sua senha no e-mail cadastrado.');
+      setPwdMsg('Enviamos um link para redefinir ou definir sua senha no e-mail cadastrado.');
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Erro ao enviar link.');
+      setError(formatAuthError(err));
     } finally {
       setPwdLoading(false);
     }
@@ -75,7 +87,7 @@ export default function ProfilePage() {
       if (isSheetAuth && token) {
         await changeSheetPassword(token, oldPassword, newPassword);
       } else {
-        await changePortalPassword(newPassword);
+        await changePortalPassword(newPassword, oldPassword);
       }
       setPwdMsg('Senha alterada com sucesso.');
       setOldPassword('');
@@ -83,11 +95,22 @@ export default function ProfilePage() {
       setConfirmPassword('');
       await refreshProfile();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Erro ao alterar senha.');
+      setError(formatAuthError(err));
     } finally {
       setPwdLoading(false);
     }
   };
+
+  const passwordSectionHint = isSheetAuth
+    ? 'Você entrou com e-mail e senha (legado). Altere abaixo ou peça uma nova senha temporária ao financeiro.'
+    : isFirebaseEmail
+      ? 'Entrada com e-mail e senha. Informe a senha atual para alterar ou use o link de redefinição.'
+      : isGoogleOnly
+        ? 'Entrada com Google. Para definir uma senha alternativa, envie o link por e-mail e conclua no formulário recebido.'
+        : 'Entrada principal com Google; você também tem senha no portal. Informe a senha atual para alterar.';
+
+  const showChangePasswordForm = isSheetAuth || hasPassword;
+  const needsCurrentPassword = isSheetAuth || hasPassword;
 
   return (
     <div className="max-w-lg mx-auto space-y-6">
@@ -187,11 +210,7 @@ export default function ProfilePage() {
             <KeyRound className="w-5 h-5 text-slate-600 shrink-0 mt-0.5" />
             <div>
               <h2 className="text-sm font-bold text-slate-800">Senha do portal</h2>
-              <p className="text-xs text-slate-500 mt-1 leading-relaxed">
-                {isSheetAuth
-                  ? 'Você entrou com e-mail e senha. Altere abaixo ou peça uma nova senha temporária ao financeiro.'
-                  : 'Login principal com Google. Também é possível definir senha alternativa no Firebase, se habilitado.'}
-              </p>
+              <p className="text-xs text-slate-500 mt-1 leading-relaxed">{passwordSectionHint}</p>
             </div>
           </div>
           {!isSheetAuth && (
@@ -202,12 +221,13 @@ export default function ProfilePage() {
               className="inline-flex items-center gap-2 px-4 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-800 text-sm font-bold rounded-xl disabled:opacity-50"
             >
               {pwdLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <KeyRound className="w-4 h-4" />}
-              Enviar link por e-mail (Firebase)
+              {isGoogleOnly ? 'Enviar link para definir senha' : 'Enviar link de redefinição por e-mail'}
             </button>
           )}
+          {showChangePasswordForm && (
           <form onSubmit={(e) => void handleChangePassword(e)} className="space-y-3 pt-2 border-t border-slate-100">
             <p className="text-[10px] font-bold uppercase text-slate-400">Alterar senha</p>
-            {isSheetAuth && (
+            {needsCurrentPassword && (
               <input
                 type="password"
                 value={oldPassword}
@@ -235,27 +255,23 @@ export default function ProfilePage() {
             />
             <button
               type="submit"
-              disabled={pwdLoading || !newPassword || (isSheetAuth && !oldPassword)}
+              disabled={
+                pwdLoading ||
+                !newPassword ||
+                (needsCurrentPassword && !oldPassword)
+              }
               className="inline-flex items-center gap-2 px-4 py-2 text-sm font-bold text-purple-700 bg-purple-50 rounded-lg disabled:opacity-50"
             >
               Salvar nova senha
             </button>
           </form>
+          )}
           {pwdMsg && (
             <div className="rounded-lg border border-green-200 bg-green-50 p-3 text-xs text-green-700">
               {pwdMsg}
             </div>
           )}
         </div>
-      )}
-
-      {clientStatus === 'pendente' && (
-        <Link
-          to="/aguardando"
-          className="inline-block text-sm text-purple-700 hover:text-purple-900 font-semibold"
-        >
-          ← Voltar para aguardando aprovação
-        </Link>
       )}
     </div>
   );
