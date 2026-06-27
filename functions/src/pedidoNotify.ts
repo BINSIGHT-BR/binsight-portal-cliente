@@ -67,6 +67,13 @@ export async function maybeNotifyDocumentsAdded(
   });
 }
 
+function isFinalizadoStatus(status: string | undefined): boolean {
+  return String(status ?? '')
+    .trim()
+    .toUpperCase()
+    .includes('FINALIZADO');
+}
+
 export async function maybeNotifyPedidoChanges(
   before: PedidoMapa,
   after: PedidoMapa
@@ -77,13 +84,15 @@ export async function maybeNotifyPedidoChanges(
   const obsChanged = (before.obsCliente ?? '').trim() !== (after.obsCliente ?? '').trim();
   const pgtoChanged = (before.statusPgto ?? '').trim() !== (after.statusPgto ?? '').trim();
 
-  if (!statusChanged && !obsChanged && !pgtoChanged) return;
+  const notifyStatusChange = statusChanged && !isFinalizadoStatus(after.status);
+
+  if (!notifyStatusChange && !obsChanged && !pgtoChanged) return;
 
   const recipients = await fetchNotifyRecipientProfilesForCnpj(after.cnpj);
   if (!recipients.length) return;
 
   const parts: string[] = [];
-  if (statusChanged) parts.push(`Status do pedido: <strong>${escHtml(after.status || '—')}</strong>`);
+  if (notifyStatusChange) parts.push(`Status do pedido: <strong>${escHtml(after.status || '—')}</strong>`);
   if (obsChanged && after.obsCliente)
     parts.push(`Atualização BInsight: <strong>${escHtml(after.obsCliente)}</strong>`);
   if (pgtoChanged) parts.push(`Pagamento: <strong>${escHtml(after.statusPgto || '—')}</strong>`);
@@ -95,6 +104,6 @@ export async function maybeNotifyPedidoChanges(
     nomeCliente: after.nomeCliente,
     subject: `[BInsight] Atualização — ${ref}`,
     message: parts.join('<br>') || 'Há uma nova atualização no seu pedido.',
-    timelineHtml: statusChanged ? buildTimelineEmailHtml(after) : undefined,
+    timelineHtml: notifyStatusChange ? buildTimelineEmailHtml(after) : undefined,
   });
 }
