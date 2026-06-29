@@ -1,6 +1,5 @@
-import { CONSOLIDADO_TAB, MONTH_TAB_NAMES } from '../constants/columns';
+import { CONSOLIDADO_TAB } from '../constants/columns';
 import { PedidoMapa } from '../types';
-import { parseBRLnum } from './brl';
 import { isPedidoEntregue, isPagamentoVencido } from './clientOrderStatus';
 import { isMeaningfulMapaRow, parseSheetDate } from './ordersCore';
 
@@ -40,19 +39,16 @@ export const VENDEDOR_PALETTE = [
   '#64748b',
 ];
 
-export type MapaTabFilter = 'todas' | 'consolidado' | 'mensais';
-
 export interface IndicatorFilters {
   dateFrom?: string;
   dateTo?: string;
   vendedores: string[];
   distribuidores: string[];
   buckets: PedidoBucket[];
-  mapaTab: MapaTabFilter;
 }
 
 export interface IndicatorKpis {
-  totalLinhas: number;
+  totalVendas: number;
   semData: number;
   pendentes: number;
   faturados: number;
@@ -61,7 +57,6 @@ export interface IndicatorKpis {
   rma: number;
   pagamentoVencido: number;
   nfPendente3d: number;
-  vendaTotal: number;
 }
 
 export interface MonthVendedorRow {
@@ -119,26 +114,24 @@ function obsIncludes(obs: string, ...needles: string[]): boolean {
   return needles.some((n) => o.includes(n.toLowerCase()));
 }
 
-function isMonthlyTabName(tab: string | undefined): boolean {
-  const n = String(tab ?? '')
+const EXCLUDED_VENDEDORES = ['fernando dantas'];
+
+function isExcludedVendedor(v: string): boolean {
+  const n = v
     .trim()
     .toLowerCase()
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '');
-  for (const m of MONTH_TAB_NAMES) {
-    const base = m.trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-    if (n === base || n.startsWith(base + ' ')) return true;
-  }
-  return false;
+  return EXCLUDED_VENDEDORES.some((e) => n === e || n.includes(e));
 }
 
-/** CONSOLIDADO + abas mensais; exclui ASSINATURAS. */
+/** Só aba CONSOLIDADO; exclui ASSINATURAS e vendedores internos. */
 export function isMapaVendasRow(p: PedidoMapa): boolean {
   if (p.mapaKind === 'assinatura') return false;
   if (!isMeaningfulMapaRow(p)) return false;
+  if (isExcludedVendedor(p.vendedor)) return false;
   const tab = (p.mapaTab ?? CONSOLIDADO_TAB).trim();
-  if (tab === CONSOLIDADO_TAB || !tab) return true;
-  return isMonthlyTabName(tab);
+  return tab === CONSOLIDADO_TAB || !tab;
 }
 
 export function normalizeVendedor(v: string): string {
@@ -206,13 +199,6 @@ function matchesDateRange(dataBR: string, dateFrom?: string, dateTo?: string): b
   return true;
 }
 
-function matchesMapaTab(p: PedidoMapa, filter: MapaTabFilter): boolean {
-  if (filter === 'todas') return true;
-  const tab = (p.mapaTab ?? CONSOLIDADO_TAB).trim();
-  if (filter === 'consolidado') return tab === CONSOLIDADO_TAB || !tab;
-  return isMonthlyTabName(tab);
-}
-
 export function defaultIndicatorFilters(): IndicatorFilters {
   const now = new Date();
   const from = new Date(now.getFullYear(), 0, 1);
@@ -222,7 +208,6 @@ export function defaultIndicatorFilters(): IndicatorFilters {
     vendedores: [],
     distribuidores: [],
     buckets: [],
-    mapaTab: 'todas',
   };
 }
 
@@ -233,7 +218,6 @@ export function filterIndicadorPedidos(
   return pedidos.filter((p) => {
     if (!isMapaVendasRow(p)) return false;
     if (!matchesDateRange(p.data, filters.dateFrom, filters.dateTo)) return false;
-    if (!matchesMapaTab(p, filters.mapaTab)) return false;
     if (filters.vendedores.length && !filters.vendedores.includes(normalizeVendedor(p.vendedor)))
       return false;
     if (
@@ -291,7 +275,6 @@ export function buildIndicatorSummary(
   let semData = 0;
   let pagamentoVencido = 0;
   let nfPendente3d = 0;
-  let vendaTotal = 0;
 
   const monthVendedorMap = new Map<string, Map<string, number>>();
   const monthBucketMap = new Map<string, MonthBucketRow>();
@@ -300,7 +283,6 @@ export function buildIndicatorSummary(
   for (const p of filtered) {
     const bucket = classifyPedidoBucket(p);
     bucketCounts[bucket] += 1;
-    vendaTotal += parseBRLnum(p.vendaTotal);
 
     if (isPagamentoVencido(p)) pagamentoVencido += 1;
     if (isNfPendente3d(p)) nfPendente3d += 1;
@@ -375,7 +357,7 @@ export function buildIndicatorSummary(
   return {
     filtered,
     kpis: {
-      totalLinhas: filtered.length,
+      totalVendas: filtered.length,
       semData,
       pendentes: bucketCounts.pendente,
       faturados: bucketCounts.faturado,
@@ -384,7 +366,6 @@ export function buildIndicatorSummary(
       rma: bucketCounts.rma,
       pagamentoVencido,
       nfPendente3d,
-      vendaTotal,
     },
     byMonthVendedor,
     byMonthBucket,

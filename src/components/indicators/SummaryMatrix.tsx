@@ -32,7 +32,7 @@ export default function SummaryMatrix({ rows }: Props) {
             <tr>
               <th className="text-left px-3 py-2 font-bold">Mês</th>
               <th className="text-left px-3 py-2 font-bold">Vendedor</th>
-              <th className="text-right px-3 py-2 font-bold">Linhas</th>
+              <th className="text-right px-3 py-2 font-bold">Vendas</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">

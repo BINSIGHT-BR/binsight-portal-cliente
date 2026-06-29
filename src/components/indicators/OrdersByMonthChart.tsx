@@ -36,7 +36,7 @@ export default function OrdersByMonthChart({ data, vendedores, activeVendedores 
         <XAxis dataKey="monthLabel" tick={{ fontSize: 11 }} />
         <YAxis allowDecimals={false} tick={{ fontSize: 11 }} />
         <Tooltip
-          formatter={(value: number, name: string) => [`${value} linha(s)`, name]}
+          formatter={(value: number, name: string) => [`${value} venda(s)`, name]}
           labelFormatter={(label) => `Mês: ${label}`}
         />
         <Legend wrapperStyle={{ fontSize: 11 }} />

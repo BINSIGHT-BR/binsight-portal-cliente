@@ -32,7 +32,7 @@ export default function StatusMixChart({ data }: Props) {
         <YAxis allowDecimals={false} tick={{ fontSize: 11 }} />
         <Tooltip
           formatter={(value: number, name: string) => [
-            `${value} linha(s)`,
+            `${value} venda(s)`,
             BUCKET_LABELS[name as keyof typeof BUCKET_LABELS] ?? name,
           ]}
         />

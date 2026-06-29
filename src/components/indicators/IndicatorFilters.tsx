@@ -1,4 +1,4 @@
-import type { IndicatorFilters, MapaTabFilter, PedidoBucket } from '../../utils/orderIndicators';
+import type { IndicatorFilters, PedidoBucket } from '../../utils/orderIndicators';
 import { BUCKET_LABELS } from '../../utils/orderIndicators';
 
 interface Props {
@@ -10,12 +10,6 @@ interface Props {
 }
 
 const BUCKETS: PedidoBucket[] = ['pendente', 'faturado', 'entregue', 'cancelado', 'rma'];
-
-const TAB_OPTIONS: { value: MapaTabFilter; label: string }[] = [
-  { value: 'todas', label: 'Todas (CONSOLIDADO + mensais)' },
-  { value: 'consolidado', label: 'Só CONSOLIDADO' },
-  { value: 'mensais', label: 'Só abas mensais' },
-];
 
 function toggleInList(list: string[], value: string): string[] {
   return list.includes(value) ? list.filter((x) => x !== value) : [...list, value];
@@ -52,20 +46,6 @@ export default function IndicatorFilters({
             onChange={(e) => onChange({ ...filters, dateTo: e.target.value || undefined })}
             className="text-sm border border-slate-200 rounded-lg px-2 py-1.5"
           />
-        </label>
-        <label className="flex flex-col gap-1 text-[10px] font-bold uppercase text-slate-500 min-w-[180px]">
-          Aba Mapa
-          <select
-            value={filters.mapaTab}
-            onChange={(e) => onChange({ ...filters, mapaTab: e.target.value as MapaTabFilter })}
-            className="text-sm border border-slate-200 rounded-lg px-2 py-1.5"
-          >
-            {TAB_OPTIONS.map((o) => (
-              <option key={o.value} value={o.value}>
-                {o.label}
-              </option>
-            ))}
-          </select>
         </label>
         <button
           type="button"

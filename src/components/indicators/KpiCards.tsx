@@ -1,4 +1,3 @@
-import { formatBRLDisplay } from '../../utils/brl';
 import type { IndicatorKpis } from '../../utils/orderIndicators';
 
 interface Props {
@@ -7,7 +6,7 @@ interface Props {
 
 export default function KpiCards({ kpis }: Props) {
   const cards = [
-    { label: 'Linhas (período)', value: String(kpis.totalLinhas), accent: 'text-slate-800' },
+    { label: 'Vendas (período)', value: String(kpis.totalVendas), accent: 'text-slate-800' },
     { label: 'Pendentes', value: String(kpis.pendentes), accent: 'text-amber-700' },
     { label: 'Faturados', value: String(kpis.faturados), accent: 'text-blue-700' },
     { label: 'Entregues', value: String(kpis.entregues), accent: 'text-green-700' },
@@ -15,11 +14,6 @@ export default function KpiCards({ kpis }: Props) {
     { label: 'RMA', value: String(kpis.rma), accent: 'text-purple-700' },
     { label: 'Pgto vencido', value: String(kpis.pagamentoVencido), accent: 'text-red-600' },
     { label: 'NF pend. 3+ dias', value: String(kpis.nfPendente3d), accent: 'text-amber-600' },
-    {
-      label: 'Venda total',
-      value: formatBRLDisplay(kpis.vendaTotal),
-      accent: 'text-purple-800',
-    },
   ];
 
   if (kpis.semData > 0) {

@@ -43,8 +43,8 @@ export default function IndicadoresPage() {
             <h1 className="text-2xl font-bold text-slate-900">Indicadores</h1>
           </div>
           <p className="text-sm text-slate-500 mt-1 max-w-2xl">
-            Linhas do Mapa (CONSOLIDADO + abas mensais). Cada linha da planilha conta como um
-            registro — útil para volume operacional e acompanhamento do financeiro.
+            Vendas do Mapa (aba CONSOLIDADO). Cada registro da planilha conta como uma venda —
+            útil para volume operacional e acompanhamento do financeiro.
           </p>
           {lastSync && (
             <p className="text-[11px] text-slate-400 mt-1">
@@ -74,7 +74,7 @@ export default function IndicadoresPage() {
       <KpiCards kpis={summary.kpis} />
 
       <section className="bg-white border border-slate-200 rounded-xl p-4">
-        <h2 className="text-sm font-bold text-slate-800 mb-1">Pedidos por mês (por vendedor)</h2>
+        <h2 className="text-sm font-bold text-slate-800 mb-1">Vendas por mês (por vendedor)</h2>
         <p className="text-[10px] text-slate-500 mb-4">
           Barras empilhadas — legenda por vendedor (col. B)
         </p>
