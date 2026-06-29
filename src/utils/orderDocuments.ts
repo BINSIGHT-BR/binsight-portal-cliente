@@ -9,6 +9,8 @@ import { notifyDocumentsAfterChange } from './pedidoNotify';
 export type DocumentNotifyResult = {
   emailed: string[];
   skippedReason?: string;
+  /** Upload ok, mas nenhum cliente ATIVO no portal para este CNPJ. */
+  noPortalClient?: boolean;
 };
 
 async function notifyAfterDocChange(
@@ -39,11 +41,6 @@ export async function uploadAndLinkOrderDocument(
   }
 
   const shareEmails = await resolveClientDocEmails(accessToken, pedido.cnpj);
-  if (shareEmails.length === 0) {
-    throw new Error(
-      'Nenhum e-mail ATIVO no cadastro para este CNPJ. Aprove o cliente em Acessos Clientes antes de enviar NF/boleto.'
-    );
-  }
 
   const { webViewLink } = await uploadOrderDocument(
     accessToken,
@@ -63,6 +60,13 @@ export async function uploadAndLinkOrderDocument(
   const before = { ...pedido };
   const updated = await updateMapaOrder(accessToken, patch, changedBy, false, true);
   const notify = await notifyAfterDocChange(accessToken, before, updated);
+  if (shareEmails.length === 0) {
+    notify.noPortalClient = true;
+    if (!notify.emailed.length && !notify.skippedReason) {
+      notify.skippedReason =
+        'Cliente ainda não cadastrado no portal — verá o documento após aprovação. E-mail não enviado.';
+    }
+  }
   return { pedido: updated, notify };
 }
 

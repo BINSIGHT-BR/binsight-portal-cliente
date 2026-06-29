@@ -21,6 +21,7 @@ export default function OrderDocumentUpload({ pedido, accessToken, userEmail, on
   const [sharePreview, setSharePreview] = useState<string[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
+  const [infoMsg, setInfoMsg] = useState<string | null>(null);
 
   const canUpload = !USE_MOCK_DATA && (USE_OAUTH_SHEETS || !USE_OAUTH_SHEETS);
 
@@ -44,6 +45,7 @@ export default function OrderDocumentUpload({ pedido, accessToken, userEmail, on
     setBusyAction('upload');
     setError(null);
     setSuccessMsg(null);
+    setInfoMsg(null);
     try {
       if (USE_OAUTH_SHEETS) {
         const { pedido: updated, notify } = await uploadAndLinkOrderDocument(
@@ -54,10 +56,16 @@ export default function OrderDocumentUpload({ pedido, accessToken, userEmail, on
           userEmail
         );
         onUpdated(updated);
+        setSuccessMsg('Documento salvo na planilha e no Drive.');
         if (notify.emailed.length) {
-          setSuccessMsg(`E-mail enviado para: ${notify.emailed.join(', ')}`);
+          setSuccessMsg(`Documento salvo. E-mail enviado para: ${notify.emailed.join(', ')}`);
+        } else if (notify.noPortalClient) {
+          setInfoMsg(
+            notify.skippedReason ??
+              'Cliente ainda não cadastrado no portal — verá após aprovação. E-mail não enviado.'
+          );
         } else if (notify.skippedReason) {
-          setError(`Documento salvo, mas e-mail não enviado: ${notify.skippedReason}`);
+          setInfoMsg(`E-mail não enviado: ${notify.skippedReason}`);
         }
         void loadSharePreview();
       } else {
@@ -149,12 +157,13 @@ export default function OrderDocumentUpload({ pedido, accessToken, userEmail, on
         <p className="text-[10px] text-slate-600">
           {sharePreview.length
             ? `Compartilhado com: ${sharePreview.join(', ')}`
-            : 'Nenhum e-mail ATIVO para este CNPJ — aprove em Acessos Clientes.'}
+            : 'Nenhum cliente ATIVO no portal para este CNPJ — upload permitido; cliente verá após cadastro aprovado.'}
         </p>
       )}
 
       {error && <p className="text-[10px] text-red-600">{error}</p>}
       {successMsg && <p className="text-[10px] text-green-700 font-medium">{successMsg}</p>}
+      {infoMsg && <p className="text-[10px] text-amber-800 bg-amber-50 border border-amber-100 rounded-lg px-2 py-1.5">{infoMsg}</p>}
 
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <DocSlot
@@ -192,9 +201,8 @@ export default function OrderDocumentUpload({ pedido, accessToken, userEmail, on
 
       {canUpload && USE_OAUTH_SHEETS && (
         <p className="text-[10px] text-slate-500">
-          Após o envio, o cliente visualiza NF e boleto em pop-up no portal (sem ver o link do Drive).
-          Compartilhamento automático com os e-mails ATIVOS abaixo — o cliente deve entrar com o mesmo
-          Google cadastrado.
+          Pode enviar NF/boleto mesmo sem cadastro no portal — o link fica na planilha (cols AC/AD).
+          O cliente só visualiza após aprovação em Acessos. E-mail automático só se ATIVO + Notificar = Sim.
         </p>
       )}
     </div>
