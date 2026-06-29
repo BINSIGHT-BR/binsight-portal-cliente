@@ -1,9 +1,9 @@
 import { type ReactNode } from 'react';
 import { NavLink, Outlet } from 'react-router-dom';
-import { ClipboardCheck, LayoutDashboard, LogOut, Package, Shield, UserCircle, Users } from 'lucide-react';
+import { ClipboardCheck, BarChart3, LayoutDashboard, LogOut, Package, Shield, UserCircle, Users } from 'lucide-react';
 import DailyReviewPopup from '../components/DailyReviewPopup';
 import { useDailyReviewState } from '../hooks/useDailyReviewState';
-import { canEditOrders, canManageClientAccess, roleLabel } from '../utils/roles';
+import { canEditOrders, canManageClientAccess, canViewFinanceIndicators, roleLabel } from '../utils/roles';
 import BinsightBrand from '../components/BinsightBrand';
 import AdminClientPreviewBar from '../components/AdminClientPreviewBar';
 import MustChangePasswordModal from '../components/MustChangePasswordModal';
@@ -38,6 +38,7 @@ export default function AppLayout() {
   const isStaff = portalUser.role !== 'cliente' && !isViewingAsClient;
   const showClientProfile = !isStaff && clientStatus === 'ativo';
   const showAccessNav = canManageClientAccess(portalUser) && !isViewingAsClient;
+  const showIndicatorsNav = canViewFinanceIndicators(portalUser) && !isViewingAsClient;
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 flex flex-col">
@@ -98,6 +99,13 @@ export default function AppLayout() {
                   icon={<Package className="w-4 h-4" />}
                   label="Mapa Pedidos"
                 />
+                {showIndicatorsNav && (
+                  <NavItem
+                    to="/admin/indicadores"
+                    icon={<BarChart3 className="w-4 h-4" />}
+                    label="Indicadores"
+                  />
+                )}
                 {showDailyReview && (
                   <NavItem
                     to="/admin/revisao"

@@ -9,6 +9,7 @@ import PedidosPage from './pages/PedidosPage';
 import AdminPedidosPage from './pages/AdminPedidosPage';
 import AdminAcessosPage from './pages/AdminAcessosPage';
 import AdminRevisaoPage from './pages/AdminRevisaoPage';
+import IndicadoresPage from './pages/IndicadoresPage';
 import RegisterPage from './pages/RegisterPage';
 import PendingPage from './pages/PendingPage';
 import ProfilePage from './pages/ProfilePage';
@@ -36,6 +37,7 @@ export default function App() {
           <Route path="/pedidos" element={<PedidosPage />} />
           <Route path="/perfil" element={<ProfilePage />} />
           <Route path="/admin/pedidos" element={<AdminPedidosPage />} />
+          <Route path="/admin/indicadores" element={<IndicadoresPage />} />
           <Route path="/admin/revisao" element={<AdminRevisaoPage />} />
           <Route path="/admin/acessos" element={<AdminAcessosPage />} />
         </Route>

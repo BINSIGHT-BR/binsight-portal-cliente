@@ -32,6 +32,11 @@ export function canEditOrders(user: PortalUser): boolean {
   return user.role === 'admin' || user.role === 'financeiro';
 }
 
+/** Indicadores financeiros — apenas admin e financeiro (não staff). */
+export function canViewFinanceIndicators(user: PortalUser): boolean {
+  return user.role === 'admin' || user.role === 'financeiro';
+}
+
 export function canManageClientAccess(user: PortalUser): boolean {
   return user.role === 'admin' || user.role === 'financeiro';
 }
